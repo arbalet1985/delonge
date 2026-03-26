@@ -183,6 +183,7 @@ def render_dual_maps(
     invert_y: bool = False,
     x_label: str = "X",
     y_label: str = "Y",
+    show_contour_lines: bool = True,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
     levels, vmin, vmax = build_levels(ap_plot, ac_plot, levels_count)
@@ -194,10 +195,12 @@ def render_dual_maps(
     if smooth_contours:
         xg_ap, yg_ap, zg_ap = _interpolate_to_grid(triangulation, ap_plot, grid_size=grid_size, smooth_sigma=smooth_sigma)
         cf_ap = axes[0].contourf(xg_ap, yg_ap, zg_ap, levels=levels, cmap=cmap, vmin=vmin, vmax=vmax)
-        axes[0].contour(xg_ap, yg_ap, zg_ap, levels=levels, colors="#101010", linewidths=0.9, alpha=1.0)
+        if show_contour_lines:
+            axes[0].contour(xg_ap, yg_ap, zg_ap, levels=levels, colors="#101010", linewidths=0.9, alpha=1.0)
     else:
         cf_ap = axes[0].tricontourf(triangulation, ap_plot, levels=levels, cmap=cmap, vmin=vmin, vmax=vmax)
-        axes[0].tricontour(triangulation, ap_plot, levels=levels, colors="#101010", linewidths=0.9, alpha=1.0)
+        if show_contour_lines:
+            axes[0].tricontour(triangulation, ap_plot, levels=levels, colors="#101010", linewidths=0.9, alpha=1.0)
     _draw_points_and_labels(
         axes[0],
         triangulation.x,
@@ -216,10 +219,12 @@ def render_dual_maps(
     if smooth_contours:
         xg_ac, yg_ac, zg_ac = _interpolate_to_grid(triangulation, ac_plot, grid_size=grid_size, smooth_sigma=smooth_sigma)
         cf_ac = axes[1].contourf(xg_ac, yg_ac, zg_ac, levels=levels, cmap=cmap, vmin=vmin, vmax=vmax)
-        axes[1].contour(xg_ac, yg_ac, zg_ac, levels=levels, colors="#101010", linewidths=0.9, alpha=1.0)
+        if show_contour_lines:
+            axes[1].contour(xg_ac, yg_ac, zg_ac, levels=levels, colors="#101010", linewidths=0.9, alpha=1.0)
     else:
         cf_ac = axes[1].tricontourf(triangulation, ac_plot, levels=levels, cmap=cmap, vmin=vmin, vmax=vmax)
-        axes[1].tricontour(triangulation, ac_plot, levels=levels, colors="#101010", linewidths=0.9, alpha=1.0)
+        if show_contour_lines:
+            axes[1].tricontour(triangulation, ac_plot, levels=levels, colors="#101010", linewidths=0.9, alpha=1.0)
     _draw_points_and_labels(
         axes[1],
         triangulation.x,
@@ -257,6 +262,7 @@ def render_overlay_map(
     invert_y: bool = False,
     x_label: str = "X",
     y_label: str = "Y",
+    show_contour_lines: bool = True,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
     levels, vmin, vmax = build_levels(ap_plot, ac_plot, levels_count)
@@ -292,8 +298,9 @@ def render_overlay_map(
             alpha=ac_fill_alpha,
             antialiased=False,
         )
-        ax.contour(xg_ap, yg_ap, zg_ap, levels=levels, colors="#000000", linewidths=1.2, alpha=1.0)
-        ax.contour(xg_ac, yg_ac, zg_ac, levels=levels, colors="#222222", linewidths=1.1, alpha=1.0, linestyles="dashed")
+        if show_contour_lines:
+            ax.contour(xg_ap, yg_ap, zg_ap, levels=levels, colors="#000000", linewidths=1.2, alpha=1.0)
+            ax.contour(xg_ac, yg_ac, zg_ac, levels=levels, colors="#222222", linewidths=1.1, alpha=1.0, linestyles="dashed")
     else:
         ap_fill_alpha = max(0.2, min(0.85, alpha * 0.8))
         ac_fill_alpha = max(0.2, min(0.85, (1.0 - alpha) * 0.8))
@@ -317,8 +324,9 @@ def render_overlay_map(
             alpha=ac_fill_alpha,
             antialiased=False,
         )
-        ax.tricontour(triangulation, ap_plot, levels=levels, colors="#000000", linewidths=1.2, alpha=1.0)
-        ax.tricontour(triangulation, ac_plot, levels=levels, colors="#222222", linewidths=1.1, alpha=1.0, linestyles="dashed")
+        if show_contour_lines:
+            ax.tricontour(triangulation, ap_plot, levels=levels, colors="#000000", linewidths=1.2, alpha=1.0)
+            ax.tricontour(triangulation, ac_plot, levels=levels, colors="#222222", linewidths=1.1, alpha=1.0, linestyles="dashed")
     _draw_points_and_labels(
         ax,
         triangulation.x,

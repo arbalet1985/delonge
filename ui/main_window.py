@@ -118,6 +118,8 @@ class MainWindow(QMainWindow):
         self.show_rn_checkbox.setChecked(False)
         self.show_scale_bar_checkbox = QCheckBox("Показывать шкалу масштаба")
         self.show_scale_bar_checkbox.setChecked(True)
+        self.show_contour_lines_checkbox = QCheckBox("Показывать изолинии")
+        self.show_contour_lines_checkbox.setChecked(True)
         self.invert_x_checkbox = QCheckBox("Инвертировать ось X")
         self.invert_x_checkbox.setChecked(False)
         self.invert_y_checkbox = QCheckBox("Инвертировать ось Y")
@@ -141,10 +143,11 @@ class MainWindow(QMainWindow):
         settings_layout.addWidget(self.show_coordinates_checkbox, 6, 0, 1, 3)
         settings_layout.addWidget(self.show_rn_checkbox, 7, 0, 1, 3)
         settings_layout.addWidget(self.show_scale_bar_checkbox, 8, 0, 1, 3)
-        settings_layout.addWidget(self.invert_x_checkbox, 9, 0, 1, 3)
-        settings_layout.addWidget(self.invert_y_checkbox, 10, 0, 1, 3)
-        settings_layout.addWidget(self.swap_xy_checkbox, 11, 0, 1, 3)
-        settings_layout.addWidget(self.enforce_mirror_checkbox, 12, 0, 1, 3)
+        settings_layout.addWidget(self.show_contour_lines_checkbox, 9, 0, 1, 3)
+        settings_layout.addWidget(self.invert_x_checkbox, 10, 0, 1, 3)
+        settings_layout.addWidget(self.invert_y_checkbox, 11, 0, 1, 3)
+        settings_layout.addWidget(self.swap_xy_checkbox, 12, 0, 1, 3)
+        settings_layout.addWidget(self.enforce_mirror_checkbox, 13, 0, 1, 3)
 
         self.toggle_settings_btn = QToolButton()
         self.toggle_settings_btn.setText("Свернуть параметры")
@@ -326,6 +329,7 @@ class MainWindow(QMainWindow):
             invert_y=self.invert_y_checkbox.isChecked(),
             x_label=axis_x_label,
             y_label=axis_y_label,
+            show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
         )
         self.main_canvas = self._replace_canvas(self.main_canvas, fig, "Отдельные карты", 0)
         self.tabs.setCurrentIndex(0)
@@ -360,6 +364,7 @@ class MainWindow(QMainWindow):
             invert_y=self.invert_y_checkbox.isChecked(),
             x_label=axis_x_label,
             y_label=axis_y_label,
+            show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
         )
         self.overlay_canvas = self._replace_canvas(self.overlay_canvas, fig, "Overlay", 1)
         self.tabs.setCurrentIndex(1)
