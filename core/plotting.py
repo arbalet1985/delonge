@@ -10,7 +10,13 @@ from scipy.ndimage import gaussian_filter
 from core.interpolation import build_levels, mirror_fields
 
 
-def _style_axis(ax, title: str, x_label: str = "X", y_label: str = "Y") -> None:
+def _style_axis(
+    ax,
+    title: str,
+    x_label: str = "X",
+    y_label: str = "Y",
+    axis_margin: float = 0.05,
+) -> None:
     ax.set_title(title, fontsize=12, pad=8)
     ax.set_xlabel(x_label)
     ax.set_ylabel(y_label)
@@ -21,6 +27,11 @@ def _style_axis(ax, title: str, x_label: str = "X", y_label: str = "Y") -> None:
     ax.xaxis.set_major_formatter(x_fmt)
     ax.yaxis.set_major_formatter(y_fmt)
     ax.ticklabel_format(axis="both", style="plain", useOffset=False)
+    margin = float(np.clip(axis_margin, 0.0, 0.3))
+    # Contour/contourf artists can set sticky edges that effectively ignore margins.
+    # Disable them so user-configured padding is always visible.
+    ax.use_sticky_edges = False
+    ax.margins(x=margin, y=margin)
     ax.grid(alpha=0.15, linewidth=0.6)
 
 
@@ -195,6 +206,7 @@ def render_dual_maps(
     show_contour_lines: bool = True,
     vertical_layout: bool = False,
     annotation_font_size: int = 7,
+    axis_margin: float = 0.05,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
     levels, vmin, vmax = build_levels(ap_plot, ac_plot, levels_count)
@@ -227,7 +239,7 @@ def render_dual_maps(
         annotation_font_size=annotation_font_size,
     )
     _draw_scale_bar(axes[0], triangulation.x, triangulation.y, enabled=show_scale_bar)
-    _style_axis(axes[0], "Карта Ap", x_label=x_label, y_label=y_label)
+    _style_axis(axes[0], "Карта Ap", x_label=x_label, y_label=y_label, axis_margin=axis_margin)
     _apply_axis_inversion(axes[0], invert_x=invert_x, invert_y=invert_y)
     fig.colorbar(cf_ap, ax=axes[0], location="right", shrink=0.95)
 
@@ -252,7 +264,7 @@ def render_dual_maps(
         annotation_font_size=annotation_font_size,
     )
     _draw_scale_bar(axes[1], triangulation.x, triangulation.y, enabled=show_scale_bar)
-    _style_axis(axes[1], "Карта Ac", x_label=x_label, y_label=y_label)
+    _style_axis(axes[1], "Карта Ac", x_label=x_label, y_label=y_label, axis_margin=axis_margin)
     _apply_axis_inversion(axes[1], invert_x=invert_x, invert_y=invert_y)
     fig.colorbar(cf_ac, ax=axes[1], location="right", shrink=0.95)
 
@@ -280,6 +292,7 @@ def render_overlay_map(
     y_label: str = "Y",
     show_contour_lines: bool = True,
     annotation_font_size: int = 7,
+    axis_margin: float = 0.05,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
     levels, vmin, vmax = build_levels(ap_plot, ac_plot, levels_count)
@@ -356,7 +369,13 @@ def render_overlay_map(
         annotation_font_size=annotation_font_size,
     )
     _draw_scale_bar(ax, triangulation.x, triangulation.y, enabled=show_scale_bar)
-    _style_axis(ax, "Overlay Ap/Ac (проверка совпадения изолиний)", x_label=x_label, y_label=y_label)
+    _style_axis(
+        ax,
+        "Overlay Ap/Ac (проверка совпадения изолиний)",
+        x_label=x_label,
+        y_label=y_label,
+        axis_margin=axis_margin,
+    )
     _apply_axis_inversion(ax, invert_x=invert_x, invert_y=invert_y)
 
     mappable = plt.cm.ScalarMappable(cmap=cmap)

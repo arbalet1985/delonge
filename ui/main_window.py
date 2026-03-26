@@ -64,6 +64,7 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
         self._apply_styles()
+        self._connect_live_redraw_signals()
 
     def _build_controls_panel(self) -> QWidget:
         panel = QWidget()
@@ -93,7 +94,7 @@ class MainWindow(QMainWindow):
 
         self.levels_spin = QSpinBox()
         self.levels_spin.setRange(5, 40)
-        self.levels_spin.setValue(10)
+        self.levels_spin.setValue(20)
 
         self.point_size_spin = QSpinBox()
         self.point_size_spin.setRange(5, 80)
@@ -106,13 +107,18 @@ class MainWindow(QMainWindow):
         self.rotation_deg_spin = QDoubleSpinBox()
         self.rotation_deg_spin.setRange(-180.0, 180.0)
         self.rotation_deg_spin.setDecimals(1)
-        self.rotation_deg_spin.setSingleStep(1.0)
+        self.rotation_deg_spin.setSingleStep(0.2)
         self.rotation_deg_spin.setSuffix("°")
         self.rotation_deg_spin.setValue(0.0)
 
+        self.axis_margin_spin = QSpinBox()
+        self.axis_margin_spin.setRange(0, 20)
+        self.axis_margin_spin.setValue(5)
+        self.axis_margin_spin.setSuffix(" %")
+
         self.smoothing_spin = QSpinBox()
         self.smoothing_spin.setRange(0, 40)
-        self.smoothing_spin.setValue(6)
+        self.smoothing_spin.setValue(20)
         self.smoothing_spin.setSuffix(" %")
 
         self.alpha_slider = QSlider(Qt.Horizontal)
@@ -150,21 +156,23 @@ class MainWindow(QMainWindow):
         settings_layout.addWidget(self.annotation_font_spin, 2, 1)
         settings_layout.addWidget(QLabel("Поворот карты:"), 3, 0)
         settings_layout.addWidget(self.rotation_deg_spin, 3, 1)
-        settings_layout.addWidget(QLabel("Сглаживание:"), 4, 0)
-        settings_layout.addWidget(self.smoothing_spin, 4, 1)
-        settings_layout.addWidget(QLabel("Прозрачность overlay:"), 5, 0)
-        settings_layout.addWidget(self.alpha_slider, 5, 1)
-        settings_layout.addWidget(self.alpha_label, 5, 2)
-        settings_layout.addWidget(self.smooth_contours_checkbox, 6, 0, 1, 3)
-        settings_layout.addWidget(self.show_points_checkbox, 7, 0, 1, 3)
-        settings_layout.addWidget(self.show_coordinates_checkbox, 8, 0, 1, 3)
-        settings_layout.addWidget(self.show_rn_checkbox, 9, 0, 1, 3)
-        settings_layout.addWidget(self.show_scale_bar_checkbox, 10, 0, 1, 3)
-        settings_layout.addWidget(self.show_contour_lines_checkbox, 11, 0, 1, 3)
-        settings_layout.addWidget(self.invert_x_checkbox, 12, 0, 1, 3)
-        settings_layout.addWidget(self.invert_y_checkbox, 13, 0, 1, 3)
-        settings_layout.addWidget(self.swap_xy_checkbox, 14, 0, 1, 3)
-        settings_layout.addWidget(self.enforce_mirror_checkbox, 15, 0, 1, 3)
+        settings_layout.addWidget(QLabel("Отступ от рамки карты:"), 4, 0)
+        settings_layout.addWidget(self.axis_margin_spin, 4, 1)
+        settings_layout.addWidget(QLabel("Сглаживание:"), 5, 0)
+        settings_layout.addWidget(self.smoothing_spin, 5, 1)
+        settings_layout.addWidget(QLabel("Прозрачность overlay:"), 6, 0)
+        settings_layout.addWidget(self.alpha_slider, 6, 1)
+        settings_layout.addWidget(self.alpha_label, 6, 2)
+        settings_layout.addWidget(self.smooth_contours_checkbox, 7, 0, 1, 3)
+        settings_layout.addWidget(self.show_points_checkbox, 8, 0, 1, 3)
+        settings_layout.addWidget(self.show_coordinates_checkbox, 9, 0, 1, 3)
+        settings_layout.addWidget(self.show_rn_checkbox, 10, 0, 1, 3)
+        settings_layout.addWidget(self.show_scale_bar_checkbox, 11, 0, 1, 3)
+        settings_layout.addWidget(self.show_contour_lines_checkbox, 12, 0, 1, 3)
+        settings_layout.addWidget(self.invert_x_checkbox, 13, 0, 1, 3)
+        settings_layout.addWidget(self.invert_y_checkbox, 14, 0, 1, 3)
+        settings_layout.addWidget(self.swap_xy_checkbox, 15, 0, 1, 3)
+        settings_layout.addWidget(self.enforce_mirror_checkbox, 16, 0, 1, 3)
 
         self.toggle_settings_btn = QToolButton()
         self.toggle_settings_btn.setText("Свернуть параметры")
@@ -238,6 +246,68 @@ class MainWindow(QMainWindow):
 
     def _sync_alpha_text(self) -> None:
         self.alpha_label.setText(f"{self.alpha_slider.value() / 100:.2f}")
+
+    def _connect_live_redraw_signals(self) -> None:
+        live_checkboxes = [
+            self.enforce_mirror_checkbox,
+            self.show_points_checkbox,
+            self.show_coordinates_checkbox,
+            self.show_rn_checkbox,
+            self.show_scale_bar_checkbox,
+            self.show_contour_lines_checkbox,
+            self.invert_x_checkbox,
+            self.invert_y_checkbox,
+            self.swap_xy_checkbox,
+            self.smooth_contours_checkbox,
+        ]
+        for checkbox in live_checkboxes:
+            checkbox.toggled.connect(self._redraw_current_view_if_ready)
+
+        self.horizontal_align_btn.toggled.connect(self._redraw_current_view_if_ready)
+        self.alpha_slider.sliderReleased.connect(self._redraw_current_view_if_ready)
+        self.levels_spin.valueChanged.connect(self._redraw_current_view_if_ready)
+        self.point_size_spin.valueChanged.connect(self._redraw_current_view_if_ready)
+        self.annotation_font_spin.valueChanged.connect(self._redraw_current_view_if_ready)
+        self.rotation_deg_spin.valueChanged.connect(self._redraw_current_view_if_ready)
+        self.axis_margin_spin.valueChanged.connect(self._redraw_current_view_if_ready)
+        self.smoothing_spin.valueChanged.connect(self._redraw_current_view_if_ready)
+
+    def _can_prepare_data_silently(self) -> bool:
+        if not self.file_path:
+            return False
+        try:
+            _ = self._selected_map()
+        except Exception:
+            return False
+        return True
+
+    def _prepare_data_silently(self) -> bool:
+        if not self._can_prepare_data_silently():
+            return False
+        try:
+            mapping = self._selected_map()
+            self.data = load_points(self.file_path, mapping)
+            if self.swap_xy_checkbox.isChecked():
+                x = self.data["y"].to_numpy(dtype=float)
+                y = self.data["x"].to_numpy(dtype=float)
+            else:
+                x = self.data["x"].to_numpy(dtype=float)
+                y = self.data["y"].to_numpy(dtype=float)
+            if self.horizontal_align_btn.isChecked():
+                x, y = self._rotate_points_to_horizontal(x, y)
+            x, y = self._rotate_points_by_degrees(x, y, self.rotation_deg_spin.value())
+            self.triangulation = build_triangulation(x, y)
+            return True
+        except Exception:
+            return False
+
+    def _redraw_current_view_if_ready(self) -> None:
+        if not self._prepare_data_silently():
+            return
+        if self.tabs.currentIndex() == 1:
+            self.on_build_overlay()
+        else:
+            self.on_build_maps()
 
     def _toggle_settings_visibility(self, checked: bool) -> None:
         self.settings_group.setVisible(checked)
@@ -410,6 +480,7 @@ class MainWindow(QMainWindow):
             show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
             vertical_layout=self.horizontal_align_btn.isChecked(),
             annotation_font_size=self.annotation_font_spin.value(),
+            axis_margin=self.axis_margin_spin.value() / 100.0,
         )
         self.main_canvas = self._replace_canvas(self.main_canvas, fig, "Отдельные карты", 0)
         self.tabs.setCurrentIndex(0)
@@ -446,6 +517,7 @@ class MainWindow(QMainWindow):
             y_label=axis_y_label,
             show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
             annotation_font_size=self.annotation_font_spin.value(),
+            axis_margin=self.axis_margin_spin.value() / 100.0,
         )
         self.overlay_canvas = self._replace_canvas(self.overlay_canvas, fig, "Overlay", 1)
         self.tabs.setCurrentIndex(1)
