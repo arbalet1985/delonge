@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
+from matplotlib.ticker import ScalarFormatter
 from matplotlib.tri import LinearTriInterpolator, Triangulation
 from scipy.ndimage import gaussian_filter
 
@@ -13,6 +14,13 @@ def _style_axis(ax, title: str, x_label: str = "X", y_label: str = "Y") -> None:
     ax.set_title(title, fontsize=12, pad=8)
     ax.set_xlabel(x_label)
     ax.set_ylabel(y_label)
+    x_fmt = ScalarFormatter(useOffset=False)
+    y_fmt = ScalarFormatter(useOffset=False)
+    x_fmt.set_scientific(False)
+    y_fmt.set_scientific(False)
+    ax.xaxis.set_major_formatter(x_fmt)
+    ax.yaxis.set_major_formatter(y_fmt)
+    ax.ticklabel_format(axis="both", style="plain", useOffset=False)
     ax.grid(alpha=0.15, linewidth=0.6)
 
 
@@ -32,6 +40,7 @@ def _draw_points_and_labels(
     show_coordinates: bool,
     show_rn_labels: bool,
     rn_labels: list[str] | None,
+    annotation_font_size: int,
 ) -> None:
     if show_points:
         ax.scatter(x, y, s=point_size, c="white", edgecolors="black", linewidths=0.35, zorder=5)
@@ -41,7 +50,7 @@ def _draw_points_and_labels(
                 xi,
                 yi,
                 f"({xi:.2f}, {yi:.2f})",
-                fontsize=6.0,
+                fontsize=annotation_font_size,
                 color="#202020",
                 ha="left",
                 va="bottom",
@@ -54,7 +63,7 @@ def _draw_points_and_labels(
                 xi,
                 yi,
                 f"{label}",
-                fontsize=8.2,
+                fontsize=annotation_font_size,
                 color="#101010",
                 ha="right",
                 va="top",
@@ -184,11 +193,16 @@ def render_dual_maps(
     x_label: str = "X",
     y_label: str = "Y",
     show_contour_lines: bool = True,
+    vertical_layout: bool = False,
+    annotation_font_size: int = 7,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
     levels, vmin, vmax = build_levels(ap_plot, ac_plot, levels_count)
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
+    if vertical_layout:
+        fig, axes = plt.subplots(2, 1, figsize=(8, 10), constrained_layout=True)
+    else:
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
     cmap = "Greys"
     overlay_cmap_ac = "Greys_r"
 
@@ -210,6 +224,7 @@ def render_dual_maps(
         show_coordinates=show_coordinates,
         show_rn_labels=show_rn_labels,
         rn_labels=rn_labels,
+        annotation_font_size=annotation_font_size,
     )
     _draw_scale_bar(axes[0], triangulation.x, triangulation.y, enabled=show_scale_bar)
     _style_axis(axes[0], "Карта Ap", x_label=x_label, y_label=y_label)
@@ -234,6 +249,7 @@ def render_dual_maps(
         show_coordinates=show_coordinates,
         show_rn_labels=show_rn_labels,
         rn_labels=rn_labels,
+        annotation_font_size=annotation_font_size,
     )
     _draw_scale_bar(axes[1], triangulation.x, triangulation.y, enabled=show_scale_bar)
     _style_axis(axes[1], "Карта Ac", x_label=x_label, y_label=y_label)
@@ -263,6 +279,7 @@ def render_overlay_map(
     x_label: str = "X",
     y_label: str = "Y",
     show_contour_lines: bool = True,
+    annotation_font_size: int = 7,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
     levels, vmin, vmax = build_levels(ap_plot, ac_plot, levels_count)
@@ -336,6 +353,7 @@ def render_overlay_map(
         show_coordinates=show_coordinates,
         show_rn_labels=show_rn_labels,
         rn_labels=rn_labels,
+        annotation_font_size=annotation_font_size,
     )
     _draw_scale_bar(ax, triangulation.x, triangulation.y, enabled=show_scale_bar)
     _style_axis(ax, "Overlay Ap/Ac (проверка совпадения изолиний)", x_label=x_label, y_label=y_label)

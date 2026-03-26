@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGridLayout,
@@ -70,7 +72,7 @@ class MainWindow(QMainWindow):
 
         file_group = QGroupBox("Данные")
         file_layout = QVBoxLayout(file_group)
-        load_btn = QPushButton("Загрузить Excel (111.xlsx)")
+        load_btn = QPushButton("Загрузить Excel")
         load_btn.clicked.connect(self.on_load_excel)
         file_layout.addWidget(load_btn)
         file_layout.addWidget(self.file_label)
@@ -96,6 +98,17 @@ class MainWindow(QMainWindow):
         self.point_size_spin = QSpinBox()
         self.point_size_spin.setRange(5, 80)
         self.point_size_spin.setValue(18)
+
+        self.annotation_font_spin = QSpinBox()
+        self.annotation_font_spin.setRange(5, 24)
+        self.annotation_font_spin.setValue(7)
+
+        self.rotation_deg_spin = QDoubleSpinBox()
+        self.rotation_deg_spin.setRange(-180.0, 180.0)
+        self.rotation_deg_spin.setDecimals(1)
+        self.rotation_deg_spin.setSingleStep(1.0)
+        self.rotation_deg_spin.setSuffix("°")
+        self.rotation_deg_spin.setValue(0.0)
 
         self.smoothing_spin = QSpinBox()
         self.smoothing_spin.setRange(0, 40)
@@ -133,21 +146,25 @@ class MainWindow(QMainWindow):
         settings_layout.addWidget(self.levels_spin, 0, 1)
         settings_layout.addWidget(QLabel("Размер точек:"), 1, 0)
         settings_layout.addWidget(self.point_size_spin, 1, 1)
-        settings_layout.addWidget(QLabel("Сглаживание:"), 2, 0)
-        settings_layout.addWidget(self.smoothing_spin, 2, 1)
-        settings_layout.addWidget(QLabel("Прозрачность overlay:"), 3, 0)
-        settings_layout.addWidget(self.alpha_slider, 3, 1)
-        settings_layout.addWidget(self.alpha_label, 3, 2)
-        settings_layout.addWidget(self.smooth_contours_checkbox, 4, 0, 1, 3)
-        settings_layout.addWidget(self.show_points_checkbox, 5, 0, 1, 3)
-        settings_layout.addWidget(self.show_coordinates_checkbox, 6, 0, 1, 3)
-        settings_layout.addWidget(self.show_rn_checkbox, 7, 0, 1, 3)
-        settings_layout.addWidget(self.show_scale_bar_checkbox, 8, 0, 1, 3)
-        settings_layout.addWidget(self.show_contour_lines_checkbox, 9, 0, 1, 3)
-        settings_layout.addWidget(self.invert_x_checkbox, 10, 0, 1, 3)
-        settings_layout.addWidget(self.invert_y_checkbox, 11, 0, 1, 3)
-        settings_layout.addWidget(self.swap_xy_checkbox, 12, 0, 1, 3)
-        settings_layout.addWidget(self.enforce_mirror_checkbox, 13, 0, 1, 3)
+        settings_layout.addWidget(QLabel("Шрифт подписей (rn/коорд.):"), 2, 0)
+        settings_layout.addWidget(self.annotation_font_spin, 2, 1)
+        settings_layout.addWidget(QLabel("Поворот карты:"), 3, 0)
+        settings_layout.addWidget(self.rotation_deg_spin, 3, 1)
+        settings_layout.addWidget(QLabel("Сглаживание:"), 4, 0)
+        settings_layout.addWidget(self.smoothing_spin, 4, 1)
+        settings_layout.addWidget(QLabel("Прозрачность overlay:"), 5, 0)
+        settings_layout.addWidget(self.alpha_slider, 5, 1)
+        settings_layout.addWidget(self.alpha_label, 5, 2)
+        settings_layout.addWidget(self.smooth_contours_checkbox, 6, 0, 1, 3)
+        settings_layout.addWidget(self.show_points_checkbox, 7, 0, 1, 3)
+        settings_layout.addWidget(self.show_coordinates_checkbox, 8, 0, 1, 3)
+        settings_layout.addWidget(self.show_rn_checkbox, 9, 0, 1, 3)
+        settings_layout.addWidget(self.show_scale_bar_checkbox, 10, 0, 1, 3)
+        settings_layout.addWidget(self.show_contour_lines_checkbox, 11, 0, 1, 3)
+        settings_layout.addWidget(self.invert_x_checkbox, 12, 0, 1, 3)
+        settings_layout.addWidget(self.invert_y_checkbox, 13, 0, 1, 3)
+        settings_layout.addWidget(self.swap_xy_checkbox, 14, 0, 1, 3)
+        settings_layout.addWidget(self.enforce_mirror_checkbox, 15, 0, 1, 3)
 
         self.toggle_settings_btn = QToolButton()
         self.toggle_settings_btn.setText("Свернуть параметры")
@@ -160,15 +177,28 @@ class MainWindow(QMainWindow):
 
         actions = QGroupBox("Действия")
         actions_layout = QVBoxLayout(actions)
+        self.horizontal_align_btn = QPushButton("Горизонтальное выравнивание: выкл")
+        self.horizontal_align_btn.setCheckable(True)
+        self.horizontal_align_btn.setChecked(False)
+        self.horizontal_align_btn.toggled.connect(self._sync_horizontal_align_btn_text)
         build_btn = QPushButton("Построить карты Ap / Ac")
         overlay_btn = QPushButton("Проверить наложение (overlay)")
-        save_btn = QPushButton("Сохранить текущий график PNG")
+        save_btn = QPushButton("Сохранить график PNG")
+        export_corel_btn = QPushButton("Экспорт Corel")
+        actions_layout.addWidget(self.horizontal_align_btn)
         build_btn.clicked.connect(self.on_build_maps)
         overlay_btn.clicked.connect(self.on_build_overlay)
         save_btn.clicked.connect(self.on_save_plot)
+        export_corel_btn.clicked.connect(self.on_export_corel)
         actions_layout.addWidget(build_btn)
         actions_layout.addWidget(overlay_btn)
-        actions_layout.addWidget(save_btn)
+        export_row = QWidget()
+        export_row_layout = QHBoxLayout(export_row)
+        export_row_layout.setContentsMargins(0, 0, 0, 0)
+        export_row_layout.setSpacing(8)
+        export_row_layout.addWidget(save_btn)
+        export_row_layout.addWidget(export_corel_btn)
+        actions_layout.addWidget(export_row)
         layout.addWidget(actions)
 
         layout.addStretch(1)
@@ -212,6 +242,50 @@ class MainWindow(QMainWindow):
     def _toggle_settings_visibility(self, checked: bool) -> None:
         self.settings_group.setVisible(checked)
         self.toggle_settings_btn.setText("Свернуть параметры" if checked else "Развернуть параметры")
+
+    def _sync_horizontal_align_btn_text(self, checked: bool) -> None:
+        self.horizontal_align_btn.setText(
+            "Горизонтальное выравнивание: вкл" if checked else "Горизонтальное выравнивание: выкл"
+        )
+
+    def _rotate_points_to_horizontal(self, x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        points = np.column_stack((x, y))
+        center = points.mean(axis=0)
+        centered = points - center
+
+        cov = np.cov(centered, rowvar=False)
+        eigen_values, eigen_vectors = np.linalg.eigh(cov)
+        major_axis = eigen_vectors[:, int(np.argmax(eigen_values))]
+        angle = float(np.arctan2(major_axis[1], major_axis[0]))
+        theta = -angle
+
+        cos_t = float(np.cos(theta))
+        sin_t = float(np.sin(theta))
+        rotation_matrix = np.array([[cos_t, -sin_t], [sin_t, cos_t]])
+        rotated = centered @ rotation_matrix.T
+
+        # Ensure the longer extent is along X after rotation.
+        x_span = float(np.max(rotated[:, 0]) - np.min(rotated[:, 0]))
+        y_span = float(np.max(rotated[:, 1]) - np.min(rotated[:, 1]))
+        if y_span > x_span:
+            rotate_90 = np.array([[0.0, -1.0], [1.0, 0.0]])
+            rotated = rotated @ rotate_90.T
+
+        rotated = rotated + center
+        return rotated[:, 0], rotated[:, 1]
+
+    def _rotate_points_by_degrees(self, x: np.ndarray, y: np.ndarray, degrees: float) -> tuple[np.ndarray, np.ndarray]:
+        if abs(degrees) < 1e-9:
+            return x, y
+        points = np.column_stack((x, y))
+        center = points.mean(axis=0)
+        centered = points - center
+        theta = float(np.deg2rad(degrees))
+        cos_t = float(np.cos(theta))
+        sin_t = float(np.sin(theta))
+        rotation_matrix = np.array([[cos_t, -sin_t], [sin_t, cos_t]])
+        rotated = centered @ rotation_matrix.T + center
+        return rotated[:, 0], rotated[:, 1]
 
     def on_load_excel(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
@@ -293,6 +367,10 @@ class MainWindow(QMainWindow):
             else:
                 x = self.data["x"].to_numpy(dtype=float)
                 y = self.data["y"].to_numpy(dtype=float)
+
+            if self.horizontal_align_btn.isChecked():
+                x, y = self._rotate_points_to_horizontal(x, y)
+            x, y = self._rotate_points_by_degrees(x, y, self.rotation_deg_spin.value())
             self.triangulation = build_triangulation(x, y)
             return True
         except Exception as exc:  # noqa: BLE001
@@ -330,6 +408,8 @@ class MainWindow(QMainWindow):
             x_label=axis_x_label,
             y_label=axis_y_label,
             show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
+            vertical_layout=self.horizontal_align_btn.isChecked(),
+            annotation_font_size=self.annotation_font_spin.value(),
         )
         self.main_canvas = self._replace_canvas(self.main_canvas, fig, "Отдельные карты", 0)
         self.tabs.setCurrentIndex(0)
@@ -365,6 +445,7 @@ class MainWindow(QMainWindow):
             x_label=axis_x_label,
             y_label=axis_y_label,
             show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
+            annotation_font_size=self.annotation_font_spin.value(),
         )
         self.overlay_canvas = self._replace_canvas(self.overlay_canvas, fig, "Overlay", 1)
         self.tabs.setCurrentIndex(1)
@@ -389,6 +470,45 @@ class MainWindow(QMainWindow):
             self._show_error(f"Не удалось сохранить файл: {exc}")
             return
         QMessageBox.information(self, "Готово", f"Сохранено: {output_path}")
+
+    def on_export_corel(self) -> None:
+        canvas = self.main_canvas if self.tabs.currentIndex() == 0 else self.overlay_canvas
+        if canvas.figure is None or len(canvas.figure.axes) == 0:
+            self._show_error("Сначала постройте график.")
+            return
+
+        output_path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Экспорт для CorelDRAW",
+            str(Path.cwd() / "map_for_corel.svg"),
+            "SVG (*.svg);;PDF (*.pdf);;EPS (*.eps);;CorelDRAW (*.cdr)",
+        )
+        if not output_path:
+            return
+
+        try:
+            ext = Path(output_path).suffix.lower()
+            if selected_filter.startswith("CorelDRAW") or ext == ".cdr":
+                # Direct CDR export is not supported by matplotlib.
+                # Save SVG as Corel-friendly vector instead.
+                svg_path = str(Path(output_path).with_suffix(".svg"))
+                canvas.figure.savefig(svg_path, format="svg")
+                QMessageBox.information(
+                    self,
+                    "Экспорт Corel",
+                    (
+                        "Прямой экспорт в .cdr недоступен.\n"
+                        f"Сохранен векторный файл SVG для открытия в CorelDRAW:\n{svg_path}"
+                    ),
+                )
+                return
+
+            canvas.figure.savefig(output_path)
+        except Exception as exc:  # noqa: BLE001
+            self._show_error(f"Не удалось экспортировать файл: {exc}")
+            return
+
+        QMessageBox.information(self, "Готово", f"Экспортировано: {output_path}")
 
     def _show_error(self, message: str) -> None:
         QMessageBox.critical(self, "Ошибка", message)
