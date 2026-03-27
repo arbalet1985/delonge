@@ -160,6 +160,12 @@ class MainWindow(QMainWindow):
         self.contour_label_font_spin.setRange(6, 20)
         self.contour_label_font_spin.setValue(8)
 
+        self.contour_line_width_spin = QDoubleSpinBox()
+        self.contour_line_width_spin.setRange(0.3, 6.0)
+        self.contour_line_width_spin.setDecimals(1)
+        self.contour_line_width_spin.setSingleStep(0.1)
+        self.contour_line_width_spin.setValue(1.0)
+
         self.cmap_start_btn = QPushButton("Цвет 1")
         self.cmap_end_btn = QPushButton("Цвет 2")
         self._sync_cmap_button_styles()
@@ -208,10 +214,12 @@ class MainWindow(QMainWindow):
         settings_layout.addWidget(self.show_contour_labels_checkbox, 14, 0, 1, 3)
         settings_layout.addWidget(QLabel("Шрифт подписей изолиний:"), 15, 0)
         settings_layout.addWidget(self.contour_label_font_spin, 15, 1)
-        settings_layout.addWidget(self.invert_x_checkbox, 16, 0, 1, 3)
-        settings_layout.addWidget(self.invert_y_checkbox, 17, 0, 1, 3)
-        settings_layout.addWidget(self.swap_xy_checkbox, 18, 0, 1, 3)
-        settings_layout.addWidget(self.enforce_mirror_checkbox, 19, 0, 1, 3)
+        settings_layout.addWidget(QLabel("Толщина изолиний:"), 16, 0)
+        settings_layout.addWidget(self.contour_line_width_spin, 16, 1)
+        settings_layout.addWidget(self.invert_x_checkbox, 17, 0, 1, 3)
+        settings_layout.addWidget(self.invert_y_checkbox, 18, 0, 1, 3)
+        settings_layout.addWidget(self.swap_xy_checkbox, 19, 0, 1, 3)
+        settings_layout.addWidget(self.enforce_mirror_checkbox, 20, 0, 1, 3)
 
         self.toggle_settings_btn = QToolButton()
         self.toggle_settings_btn.setText("Свернуть параметры")
@@ -327,6 +335,7 @@ class MainWindow(QMainWindow):
         self.point_size_spin.valueChanged.connect(self._redraw_current_view_if_ready)
         self.annotation_font_spin.valueChanged.connect(self._redraw_current_view_if_ready)
         self.contour_label_font_spin.valueChanged.connect(self._redraw_current_view_if_ready)
+        self.contour_line_width_spin.valueChanged.connect(self._redraw_current_view_if_ready)
         self.rotation_deg_spin.valueChanged.connect(self._redraw_current_view_if_ready)
         self.axis_margin_spin.valueChanged.connect(self._redraw_current_view_if_ready)
         self.smoothing_spin.valueChanged.connect(self._redraw_current_view_if_ready)
@@ -539,6 +548,7 @@ class MainWindow(QMainWindow):
             x_label=axis_x_label,
             y_label=axis_y_label,
             show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
+            contour_line_width=self.contour_line_width_spin.value(),
             show_contour_labels=self.show_contour_labels_checkbox.isChecked(),
             contour_label_font_size=self.contour_label_font_spin.value(),
             vertical_layout=self.horizontal_align_btn.isChecked(),
@@ -583,6 +593,7 @@ class MainWindow(QMainWindow):
             x_label=axis_x_label,
             y_label=axis_y_label,
             show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
+            contour_line_width=self.contour_line_width_spin.value(),
             show_contour_labels=self.show_contour_labels_checkbox.isChecked(),
             contour_label_font_size=self.contour_label_font_spin.value(),
             annotation_font_size=self.annotation_font_spin.value(),
