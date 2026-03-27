@@ -1,0 +1,12 @@
+# Скопируйте этот файл в config.local.yaml и подставьте ключ.
+# config.local.yaml в .gitignore — в репозиторий не попадёт.
+#
+# Тот же ключ, что в weather-bot (поле google_maps_api_key в config.yaml у бота).
+# В текущем weather-bot/config.yaml на диске этого поля может не быть —
+# тогда добавьте ключ в оба проекта (бот и pasha) или задайте переменную
+# окружения GOOGLE_MAPS_API_KEY.
+
+# Опционально: API-ключ Google Static Maps для гибридной подложки
+# (спутник + подписи, maptype=hybrid). Документация:
+# https://developers.google.com/maps/documentation/maps-static/start
+google_maps_api_key: "YOUR_GOOGLE_MAPS_API_KEY_HERE"

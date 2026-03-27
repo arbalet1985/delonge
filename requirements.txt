@@ -1,7 +1,11 @@
 pandas
 numpy
 scipy
-plotly
-kaleido
+matplotlib
+Pillow
+contextily
+xyzservices
+pyproj
 PySide6
 openpyxl
+PyYAML

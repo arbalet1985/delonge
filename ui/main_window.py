@@ -29,6 +29,8 @@ from PySide6.QtWidgets import (
 )
 
 from core.data_loader import ColumnMap, auto_detect_columns, load_points, read_excel_headers
+from core.basemap import BasemapError, lon_lat_to_web_mercator, looks_like_wgs84_degrees
+from core.config import load_app_config
 from core.interpolation import build_triangulation
 from core.plotting import render_dual_maps, render_overlay_map
 
@@ -69,6 +71,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         self._apply_styles()
         self._connect_live_redraw_signals()
+        self._using_web_mercator = False
+        self._label_lon_lat_deg: tuple[np.ndarray, np.ndarray] | None = None
+        self._sync_map_opacity_text()
+        self._update_basemap_availability()
 
     def _build_controls_panel(self) -> QWidget:
         panel = QWidget()
@@ -88,6 +94,7 @@ class MainWindow(QMainWindow):
         for key, label in [("rn", "rn"), ("x", "x"), ("y", "y"), ("ap", "Ap"), ("ac", "Ac")]:
             combo = QComboBox()
             combo.setMinimumWidth(220)
+            combo.currentIndexChanged.connect(self._update_basemap_availability)
             self.column_combos[key] = combo
             form.addRow(f"{label}:", combo)
         layout.addWidget(map_group)
@@ -134,11 +141,51 @@ class MainWindow(QMainWindow):
         self.smoothing_spin.setValue(20)
         self.smoothing_spin.setSuffix(" %")
 
+        self.map_view_rotation_spin = QDoubleSpinBox()
+        self.map_view_rotation_spin.setRange(-180.0, 180.0)
+        self.map_view_rotation_spin.setDecimals(1)
+        self.map_view_rotation_spin.setSingleStep(0.5)
+        self.map_view_rotation_spin.setSuffix("°")
+        self.map_view_rotation_spin.setValue(0.0)
+        self.map_view_rotation_spin.setToolTip(
+            "Поворот подложки и данных в плоскости карты (Web Mercator), вокруг центра точек. "
+            "При ненулевом угле подложка обрезается по контуру области данных (выпуклая оболочка)."
+        )
+
+        self.basemap_checkbox = QCheckBox("Спутниковая подложка")
+        self.basemap_checkbox.setChecked(False)
+        self.basemap_checkbox.setToolTip(
+            "WGS84 в градусах; без поворота и без «горизонтального выравнивания». "
+            "Тайлы привязаны к северу вверх в Web Mercator — поворот точек ломает совпадение снимка с данными. "
+            "Нужен интернет."
+        )
+
+        self.basemap_source_combo = QComboBox()
+        self.basemap_source_combo.addItem("Esri World Imagery (тайлы)", "esri")
+        self.basemap_source_combo.addItem("Yandex схема (Static API)", "yandex")
+        self.basemap_source_combo.addItem("Yandex спутник+подписи (Static API)", "yandex_hybrid")
+        self.basemap_source_combo.addItem("Google спутник (неофиц. тайлы)", "google")
+        self.basemap_source_combo.addItem("Google Hybrid (Static Maps API)", "google_hybrid")
+        self.basemap_source_combo.setToolTip(
+            "Как в weather-bot: Yandex — static-maps.yandex.ru (ll+spn), без ключа; "
+            "Google Hybrid — maps.googleapis.com/staticmap (нужен ключ в config.local.yaml или "
+            "GOOGLE_MAPS_API_KEY). Esri/Google тайлы — contextily."
+        )
+        yh_idx = self.basemap_source_combo.findData("yandex_hybrid")
+        if yh_idx >= 0:
+            self.basemap_source_combo.setCurrentIndex(yh_idx)
+
+        self.map_opacity_slider = QSlider(Qt.Horizontal)
+        self.map_opacity_slider.setRange(10, 100)
+        self.map_opacity_slider.setValue(75)
+        self.map_opacity_label = QLabel("0.75")
+
         self.alpha_slider = QSlider(Qt.Horizontal)
         self.alpha_slider.setRange(10, 90)
         self.alpha_slider.setValue(50)
         self.alpha_label = QLabel("0.50")
         self.alpha_slider.valueChanged.connect(self._sync_alpha_text)
+        self.map_opacity_slider.valueChanged.connect(self._sync_map_opacity_text)
 
         self.enforce_mirror_checkbox = QCheckBox("Принудительно зеркалить Ap/Ac")
         self.enforce_mirror_checkbox.setChecked(True)
@@ -194,32 +241,40 @@ class MainWindow(QMainWindow):
         settings_layout.addWidget(self.axis_margin_spin, 4, 1)
         settings_layout.addWidget(QLabel("Сглаживание:"), 5, 0)
         settings_layout.addWidget(self.smoothing_spin, 5, 1)
-        settings_layout.addWidget(QLabel("Прозрачность overlay:"), 6, 0)
-        settings_layout.addWidget(self.alpha_slider, 6, 1)
-        settings_layout.addWidget(self.alpha_label, 6, 2)
-        settings_layout.addWidget(QLabel("Градиент:"), 7, 0)
+        settings_layout.addWidget(QLabel("Поворот вида (карта+подложка):"), 6, 0)
+        settings_layout.addWidget(self.map_view_rotation_spin, 6, 1)
+        settings_layout.addWidget(self.basemap_checkbox, 7, 0, 1, 3)
+        settings_layout.addWidget(QLabel("Источник подложки:"), 8, 0)
+        settings_layout.addWidget(self.basemap_source_combo, 8, 1, 1, 2)
+        settings_layout.addWidget(QLabel("Прозрачность слоя над подложкой:"), 9, 0)
+        settings_layout.addWidget(self.map_opacity_slider, 9, 1)
+        settings_layout.addWidget(self.map_opacity_label, 9, 2)
+        settings_layout.addWidget(QLabel("Прозрачность overlay:"), 10, 0)
+        settings_layout.addWidget(self.alpha_slider, 10, 1)
+        settings_layout.addWidget(self.alpha_label, 10, 2)
+        settings_layout.addWidget(QLabel("Градиент:"), 11, 0)
         cmap_row = QWidget()
         cmap_row_layout = QHBoxLayout(cmap_row)
         cmap_row_layout.setContentsMargins(0, 0, 0, 0)
         cmap_row_layout.setSpacing(8)
         cmap_row_layout.addWidget(self.cmap_start_btn)
         cmap_row_layout.addWidget(self.cmap_end_btn)
-        settings_layout.addWidget(cmap_row, 7, 1, 1, 2)
-        settings_layout.addWidget(self.smooth_contours_checkbox, 8, 0, 1, 3)
-        settings_layout.addWidget(self.show_points_checkbox, 9, 0, 1, 3)
-        settings_layout.addWidget(self.show_coordinates_checkbox, 10, 0, 1, 3)
-        settings_layout.addWidget(self.show_rn_checkbox, 11, 0, 1, 3)
-        settings_layout.addWidget(self.show_scale_bar_checkbox, 12, 0, 1, 3)
-        settings_layout.addWidget(self.show_contour_lines_checkbox, 13, 0, 1, 3)
-        settings_layout.addWidget(self.show_contour_labels_checkbox, 14, 0, 1, 3)
-        settings_layout.addWidget(QLabel("Шрифт подписей изолиний:"), 15, 0)
-        settings_layout.addWidget(self.contour_label_font_spin, 15, 1)
-        settings_layout.addWidget(QLabel("Толщина изолиний:"), 16, 0)
-        settings_layout.addWidget(self.contour_line_width_spin, 16, 1)
-        settings_layout.addWidget(self.invert_x_checkbox, 17, 0, 1, 3)
-        settings_layout.addWidget(self.invert_y_checkbox, 18, 0, 1, 3)
-        settings_layout.addWidget(self.swap_xy_checkbox, 19, 0, 1, 3)
-        settings_layout.addWidget(self.enforce_mirror_checkbox, 20, 0, 1, 3)
+        settings_layout.addWidget(cmap_row, 11, 1, 1, 2)
+        settings_layout.addWidget(self.smooth_contours_checkbox, 12, 0, 1, 3)
+        settings_layout.addWidget(self.show_points_checkbox, 13, 0, 1, 3)
+        settings_layout.addWidget(self.show_coordinates_checkbox, 14, 0, 1, 3)
+        settings_layout.addWidget(self.show_rn_checkbox, 15, 0, 1, 3)
+        settings_layout.addWidget(self.show_scale_bar_checkbox, 16, 0, 1, 3)
+        settings_layout.addWidget(self.show_contour_lines_checkbox, 17, 0, 1, 3)
+        settings_layout.addWidget(self.show_contour_labels_checkbox, 18, 0, 1, 3)
+        settings_layout.addWidget(QLabel("Шрифт подписей изолиний:"), 19, 0)
+        settings_layout.addWidget(self.contour_label_font_spin, 19, 1)
+        settings_layout.addWidget(QLabel("Толщина изолиний:"), 20, 0)
+        settings_layout.addWidget(self.contour_line_width_spin, 20, 1)
+        settings_layout.addWidget(self.invert_x_checkbox, 21, 0, 1, 3)
+        settings_layout.addWidget(self.invert_y_checkbox, 22, 0, 1, 3)
+        settings_layout.addWidget(self.swap_xy_checkbox, 23, 0, 1, 3)
+        settings_layout.addWidget(self.enforce_mirror_checkbox, 24, 0, 1, 3)
 
         self.toggle_settings_btn = QToolButton()
         self.toggle_settings_btn.setText("Свернуть параметры")
@@ -310,6 +365,60 @@ class MainWindow(QMainWindow):
     def _sync_alpha_text(self) -> None:
         self.alpha_label.setText(f"{self.alpha_slider.value() / 100:.2f}")
 
+    def _sync_map_opacity_text(self) -> None:
+        self.map_opacity_label.setText(f"{self.map_opacity_slider.value() / 100:.2f}")
+
+    def _basemap_allowed(self) -> bool:
+        if abs(self.rotation_deg_spin.value()) > 1e-6:
+            return False
+        if self.horizontal_align_btn.isChecked():
+            return False
+        if not self.file_path:
+            return False
+        try:
+            _ = self._selected_map()
+        except Exception:
+            return False
+        try:
+            if self.data is not None:
+                data = self.data
+            else:
+                mapping = self._selected_map()
+                data = load_points(self.file_path, mapping)
+            if self.swap_xy_checkbox.isChecked():
+                x = data["y"].to_numpy(dtype=float)
+                y = data["x"].to_numpy(dtype=float)
+            else:
+                x = data["x"].to_numpy(dtype=float)
+                y = data["y"].to_numpy(dtype=float)
+            return bool(looks_like_wgs84_degrees(x, y))
+        except Exception:
+            return False
+
+    def _update_basemap_opacity_enabled(self) -> None:
+        on = self.basemap_checkbox.isChecked() and self.basemap_checkbox.isEnabled()
+        self.map_opacity_slider.setEnabled(on)
+        self.map_opacity_label.setEnabled(on)
+        self.basemap_source_combo.setEnabled(on)
+
+    def _selected_basemap_source_key(self) -> str:
+        data = self.basemap_source_combo.currentData()
+        return str(data) if data is not None else "esri"
+
+    def _update_basemap_availability(self) -> None:
+        allowed = self._basemap_allowed()
+        self.basemap_checkbox.setEnabled(allowed)
+        if not allowed and self.basemap_checkbox.isChecked():
+            self.basemap_checkbox.blockSignals(True)
+            self.basemap_checkbox.setChecked(False)
+            self.basemap_checkbox.blockSignals(False)
+        self._update_basemap_opacity_enabled()
+        self.basemap_checkbox.setToolTip(
+            "Спутник по координатам WGS84 (нужен интернет)."
+            if allowed
+            else "Недоступно: WGS84 в градусах, поворот 0°, без горизонтального выравнивания."
+        )
+
     def _connect_live_redraw_signals(self) -> None:
         live_checkboxes = [
             self.enforce_mirror_checkbox,
@@ -324,12 +433,17 @@ class MainWindow(QMainWindow):
             self.invert_y_checkbox,
             self.swap_xy_checkbox,
             self.smooth_contours_checkbox,
+            self.basemap_checkbox,
         ]
         for checkbox in live_checkboxes:
             checkbox.toggled.connect(self._redraw_current_view_if_ready)
 
+        self.basemap_checkbox.toggled.connect(self._update_basemap_opacity_enabled)
+
         self.horizontal_align_btn.toggled.connect(self._redraw_current_view_if_ready)
         self.alpha_slider.sliderReleased.connect(self._redraw_current_view_if_ready)
+        self.map_opacity_slider.sliderReleased.connect(self._redraw_current_view_if_ready)
+        self.basemap_source_combo.currentIndexChanged.connect(self._redraw_current_view_if_ready)
         self.levels_spin.valueChanged.connect(self._redraw_current_view_if_ready)
         self.levels_step_spin.valueChanged.connect(self._redraw_current_view_if_ready)
         self.point_size_spin.valueChanged.connect(self._redraw_current_view_if_ready)
@@ -337,6 +451,7 @@ class MainWindow(QMainWindow):
         self.contour_label_font_spin.valueChanged.connect(self._redraw_current_view_if_ready)
         self.contour_line_width_spin.valueChanged.connect(self._redraw_current_view_if_ready)
         self.rotation_deg_spin.valueChanged.connect(self._redraw_current_view_if_ready)
+        self.map_view_rotation_spin.valueChanged.connect(self._redraw_current_view_if_ready)
         self.axis_margin_spin.valueChanged.connect(self._redraw_current_view_if_ready)
         self.smoothing_spin.valueChanged.connect(self._redraw_current_view_if_ready)
 
@@ -364,12 +479,22 @@ class MainWindow(QMainWindow):
             if self.horizontal_align_btn.isChecked():
                 x, y = self._rotate_points_to_horizontal(x, y)
             x, y = self._rotate_points_by_degrees(x, y, self.rotation_deg_spin.value())
-            self.triangulation = build_triangulation(x, y)
+            use_basemap = self.basemap_checkbox.isChecked() and self._basemap_allowed()
+            if use_basemap:
+                self._label_lon_lat_deg = (np.asarray(x, dtype=float), np.asarray(y, dtype=float))
+                xm, ym = lon_lat_to_web_mercator(x, y)
+                self.triangulation = build_triangulation(xm, ym)
+                self._using_web_mercator = True
+            else:
+                self._label_lon_lat_deg = None
+                self.triangulation = build_triangulation(x, y)
+                self._using_web_mercator = False
             return True
         except Exception:
             return False
 
     def _redraw_current_view_if_ready(self) -> None:
+        self._update_basemap_availability()
         if not self._prepare_data_silently():
             return
         if self.tabs.currentIndex() == 1:
@@ -448,6 +573,7 @@ class MainWindow(QMainWindow):
         detected = auto_detect_columns(headers)
         if detected:
             self._apply_detected_columns(detected)
+        self._update_basemap_availability()
 
     def _fill_column_combos(self, headers: list[str]) -> None:
         options = [""] + headers
@@ -493,6 +619,7 @@ class MainWindow(QMainWindow):
         return ColumnMap(rn=rn, x=x, y=y, ap=ap, ac=ac)
 
     def _ensure_data_loaded(self) -> bool:
+        self._update_basemap_availability()
         if not self.file_path:
             self._show_error("Сначала загрузите Excel файл.")
             return False
@@ -509,7 +636,16 @@ class MainWindow(QMainWindow):
             if self.horizontal_align_btn.isChecked():
                 x, y = self._rotate_points_to_horizontal(x, y)
             x, y = self._rotate_points_by_degrees(x, y, self.rotation_deg_spin.value())
-            self.triangulation = build_triangulation(x, y)
+            use_basemap = self.basemap_checkbox.isChecked() and self._basemap_allowed()
+            if use_basemap:
+                self._label_lon_lat_deg = (np.asarray(x, dtype=float), np.asarray(y, dtype=float))
+                xm, ym = lon_lat_to_web_mercator(x, y)
+                self.triangulation = build_triangulation(xm, ym)
+                self._using_web_mercator = True
+            else:
+                self._label_lon_lat_deg = None
+                self.triangulation = build_triangulation(x, y)
+                self._using_web_mercator = False
             return True
         except Exception as exc:  # noqa: BLE001
             self._show_error(str(exc))
@@ -518,6 +654,7 @@ class MainWindow(QMainWindow):
     def on_build_maps(self) -> None:
         if not self._ensure_data_loaded():
             return
+        self._app_config = load_app_config()
 
         ap = self.data["ap"].to_numpy(dtype=float)
         ac = self.data["ac"].to_numpy(dtype=float)
@@ -526,43 +663,59 @@ class MainWindow(QMainWindow):
             rn_labels = [str(v) for v in self.data["rn"].tolist()]
         axis_x_label = "Y" if self.swap_xy_checkbox.isChecked() else "X"
         axis_y_label = "X" if self.swap_xy_checkbox.isChecked() else "Y"
+        if self._using_web_mercator:
+            axis_x_label = f"{axis_x_label} (м)"
+            axis_y_label = f"{axis_y_label} (м)"
 
         levels_step = self.levels_step_spin.value() if self.use_levels_step_checkbox.isChecked() else None
-        fig = render_dual_maps(
-            triangulation=self.triangulation,
-            ap=ap,
-            ac=ac,
-            levels_count=self.levels_spin.value(),
-            levels_step=levels_step,
-            point_size=self.point_size_spin.value(),
-            enforce_mirror=self.enforce_mirror_checkbox.isChecked(),
-            smooth_contours=self.smooth_contours_checkbox.isChecked(),
-            smooth_sigma=self.smoothing_spin.value() / 10.0,
-            show_points=self.show_points_checkbox.isChecked(),
-            show_coordinates=self.show_coordinates_checkbox.isChecked(),
-            show_rn_labels=self.show_rn_checkbox.isChecked(),
-            rn_labels=rn_labels,
-            show_scale_bar=self.show_scale_bar_checkbox.isChecked(),
-            invert_x=self.invert_x_checkbox.isChecked(),
-            invert_y=self.invert_y_checkbox.isChecked(),
-            x_label=axis_x_label,
-            y_label=axis_y_label,
-            show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
-            contour_line_width=self.contour_line_width_spin.value(),
-            show_contour_labels=self.show_contour_labels_checkbox.isChecked(),
-            contour_label_font_size=self.contour_label_font_spin.value(),
-            vertical_layout=self.horizontal_align_btn.isChecked(),
-            annotation_font_size=self.annotation_font_spin.value(),
-            axis_margin=self.axis_margin_spin.value() / 100.0,
-            cmap_start=self.cmap_start,
-            cmap_end=self.cmap_end,
-        )
+        basemap_on = self.basemap_checkbox.isChecked() and self._basemap_allowed()
+        try:
+            fig = render_dual_maps(
+                triangulation=self.triangulation,
+                ap=ap,
+                ac=ac,
+                levels_count=self.levels_spin.value(),
+                levels_step=levels_step,
+                point_size=self.point_size_spin.value(),
+                enforce_mirror=self.enforce_mirror_checkbox.isChecked(),
+                smooth_contours=self.smooth_contours_checkbox.isChecked(),
+                smooth_sigma=self.smoothing_spin.value() / 10.0,
+                show_points=self.show_points_checkbox.isChecked(),
+                show_coordinates=self.show_coordinates_checkbox.isChecked(),
+                show_rn_labels=self.show_rn_checkbox.isChecked(),
+                rn_labels=rn_labels,
+                show_scale_bar=self.show_scale_bar_checkbox.isChecked(),
+                invert_x=self.invert_x_checkbox.isChecked(),
+                invert_y=self.invert_y_checkbox.isChecked(),
+                x_label=axis_x_label,
+                y_label=axis_y_label,
+                show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
+                contour_line_width=self.contour_line_width_spin.value(),
+                show_contour_labels=self.show_contour_labels_checkbox.isChecked(),
+                contour_label_font_size=self.contour_label_font_spin.value(),
+                vertical_layout=self.horizontal_align_btn.isChecked(),
+                annotation_font_size=self.annotation_font_spin.value(),
+                axis_margin=self.axis_margin_spin.value() / 100.0,
+                cmap_start=self.cmap_start,
+                cmap_end=self.cmap_end,
+                basemap_enabled=basemap_on,
+                map_layer_alpha=self.map_opacity_slider.value() / 100.0,
+                web_mercator=self._using_web_mercator,
+                basemap_source=self._selected_basemap_source_key(),
+                coordinate_degrees_lon_lat=self._label_lon_lat_deg,
+                google_maps_api_key=self._app_config.google_maps_api_key,
+                view_rotation_deg=self.map_view_rotation_spin.value(),
+            )
+        except BasemapError as exc:
+            self._show_error(str(exc))
+            return
         self.main_canvas = self._replace_canvas(self.main_canvas, fig, "Отдельные карты", 0)
         self.tabs.setCurrentIndex(0)
 
     def on_build_overlay(self) -> None:
         if not self._ensure_data_loaded():
             return
+        self._app_config = load_app_config()
 
         ap = self.data["ap"].to_numpy(dtype=float)
         ac = self.data["ac"].to_numpy(dtype=float)
@@ -572,35 +725,50 @@ class MainWindow(QMainWindow):
         alpha = self.alpha_slider.value() / 100.0
         axis_x_label = "Y" if self.swap_xy_checkbox.isChecked() else "X"
         axis_y_label = "X" if self.swap_xy_checkbox.isChecked() else "Y"
+        if self._using_web_mercator:
+            axis_x_label = f"{axis_x_label} (м)"
+            axis_y_label = f"{axis_y_label} (м)"
         levels_step = self.levels_step_spin.value() if self.use_levels_step_checkbox.isChecked() else None
-        fig = render_overlay_map(
-            triangulation=self.triangulation,
-            ap=ap,
-            ac=ac,
-            alpha=alpha,
-            levels_count=self.levels_spin.value(),
-            levels_step=levels_step,
-            enforce_mirror=self.enforce_mirror_checkbox.isChecked(),
-            smooth_contours=self.smooth_contours_checkbox.isChecked(),
-            smooth_sigma=self.smoothing_spin.value() / 10.0,
-            show_points=self.show_points_checkbox.isChecked(),
-            show_coordinates=self.show_coordinates_checkbox.isChecked(),
-            show_rn_labels=self.show_rn_checkbox.isChecked(),
-            rn_labels=rn_labels,
-            show_scale_bar=self.show_scale_bar_checkbox.isChecked(),
-            invert_x=self.invert_x_checkbox.isChecked(),
-            invert_y=self.invert_y_checkbox.isChecked(),
-            x_label=axis_x_label,
-            y_label=axis_y_label,
-            show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
-            contour_line_width=self.contour_line_width_spin.value(),
-            show_contour_labels=self.show_contour_labels_checkbox.isChecked(),
-            contour_label_font_size=self.contour_label_font_spin.value(),
-            annotation_font_size=self.annotation_font_spin.value(),
-            axis_margin=self.axis_margin_spin.value() / 100.0,
-            cmap_start=self.cmap_start,
-            cmap_end=self.cmap_end,
-        )
+        basemap_on = self.basemap_checkbox.isChecked() and self._basemap_allowed()
+        try:
+            fig = render_overlay_map(
+                triangulation=self.triangulation,
+                ap=ap,
+                ac=ac,
+                alpha=alpha,
+                levels_count=self.levels_spin.value(),
+                levels_step=levels_step,
+                enforce_mirror=self.enforce_mirror_checkbox.isChecked(),
+                smooth_contours=self.smooth_contours_checkbox.isChecked(),
+                smooth_sigma=self.smoothing_spin.value() / 10.0,
+                show_points=self.show_points_checkbox.isChecked(),
+                show_coordinates=self.show_coordinates_checkbox.isChecked(),
+                show_rn_labels=self.show_rn_checkbox.isChecked(),
+                rn_labels=rn_labels,
+                show_scale_bar=self.show_scale_bar_checkbox.isChecked(),
+                invert_x=self.invert_x_checkbox.isChecked(),
+                invert_y=self.invert_y_checkbox.isChecked(),
+                x_label=axis_x_label,
+                y_label=axis_y_label,
+                show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
+                contour_line_width=self.contour_line_width_spin.value(),
+                show_contour_labels=self.show_contour_labels_checkbox.isChecked(),
+                contour_label_font_size=self.contour_label_font_spin.value(),
+                annotation_font_size=self.annotation_font_spin.value(),
+                axis_margin=self.axis_margin_spin.value() / 100.0,
+                cmap_start=self.cmap_start,
+                cmap_end=self.cmap_end,
+                basemap_enabled=basemap_on,
+                map_layer_alpha=self.map_opacity_slider.value() / 100.0,
+                web_mercator=self._using_web_mercator,
+                basemap_source=self._selected_basemap_source_key(),
+                coordinate_degrees_lon_lat=self._label_lon_lat_deg,
+                google_maps_api_key=self._app_config.google_maps_api_key,
+                view_rotation_deg=self.map_view_rotation_spin.value(),
+            )
+        except BasemapError as exc:
+            self._show_error(str(exc))
+            return
         self.overlay_canvas = self._replace_canvas(self.overlay_canvas, fig, "Overlay", 1)
         self.tabs.setCurrentIndex(1)
 
