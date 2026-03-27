@@ -1,14 +1,39 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
-from matplotlib.tri import Triangulation
+from scipy.interpolate import LinearNDInterpolator
 from scipy.spatial import Delaunay
 
 
-def build_triangulation(x: np.ndarray, y: np.ndarray) -> Triangulation:
+@dataclass(frozen=True)
+class TriangulationData:
+    x: np.ndarray
+    y: np.ndarray
+    triangles: np.ndarray
+
+
+def build_triangulation(x: np.ndarray, y: np.ndarray) -> TriangulationData:
     points = np.column_stack([x, y])
     delaunay = Delaunay(points)
-    return Triangulation(x, y, triangles=delaunay.simplices)
+    return TriangulationData(x=x, y=y, triangles=delaunay.simplices)
+
+
+def interpolate_to_grid(
+    triangulation: TriangulationData,
+    values: np.ndarray,
+    grid_size: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    xi = np.linspace(float(np.min(triangulation.x)), float(np.max(triangulation.x)), grid_size)
+    yi = np.linspace(float(np.min(triangulation.y)), float(np.max(triangulation.y)), grid_size)
+    xg, yg = np.meshgrid(xi, yi)
+
+    points = np.column_stack([triangulation.x, triangulation.y])
+    interpolator = LinearNDInterpolator(points, values)
+    zg = interpolator(xg, yg)
+    zg_data = np.asarray(zg, dtype=float)
+    return xg, yg, zg_data
 
 
 def mirror_fields(ap: np.ndarray, ac: np.ndarray, enforce_mirror: bool = True) -> tuple[np.ndarray, np.ndarray]:

@@ -1,6 +1,7 @@
 pandas
 numpy
 scipy
-matplotlib
+plotly
+kaleido
 PySide6
 openpyxl
