@@ -7,7 +7,9 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from scipy.ndimage import gaussian_filter
 
-from core.interpolation import TriangulationData, build_levels, interpolate_to_grid, mirror_fields
+from matplotlib.tri import Triangulation
+
+from core.interpolation import build_levels, interpolate_to_grid, mirror_fields
 
 
 @dataclass(frozen=True)
@@ -63,7 +65,7 @@ def _nice_scale_length_meters(target_m: float) -> int:
     return int(max(1, nice))
 
 
-def _compute_scale_bar(tr: TriangulationData) -> tuple[float, float, float, int] | None:
+def _compute_scale_bar(tr: Triangulation) -> tuple[float, float, float, int] | None:
     x = tr.x
     y = tr.y
     x_min = float(np.min(x))
@@ -100,7 +102,7 @@ def _add_points(
     fig: go.Figure,
     row: int | None,
     col: int | None,
-    tr: TriangulationData,
+    tr: Triangulation,
     params: PlotParams,
     rn_labels: list[str] | None,
 ) -> None:
@@ -140,7 +142,7 @@ def _add_points(
     else:
         fig.add_trace(scatter, row=row, col=col)
 
-def _add_scale_bar(fig: go.Figure, row: int | None, col: int | None, rows_total: int, cols_total: int, tr: TriangulationData) -> None:
+def _add_scale_bar(fig: go.Figure, row: int | None, col: int | None, rows_total: int, cols_total: int, tr: Triangulation) -> None:
     bar = _compute_scale_bar(tr)
     if not bar:
         return
@@ -233,7 +235,7 @@ def _contour_traces(
 
 
 def render_dual_maps_plotly(
-    triangulation: TriangulationData,
+    triangulation: Triangulation,
     ap: np.ndarray,
     ac: np.ndarray,
     params: PlotParams,
@@ -326,7 +328,7 @@ def render_dual_maps_plotly(
 
 
 def render_overlay_plotly(
-    triangulation: TriangulationData,
+    triangulation: Triangulation,
     ap: np.ndarray,
     ac: np.ndarray,
     params: PlotParams,

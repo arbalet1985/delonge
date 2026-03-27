@@ -1,27 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
+from matplotlib.tri import Triangulation
 from scipy.interpolate import LinearNDInterpolator
 from scipy.spatial import Delaunay
 
 
-@dataclass(frozen=True)
-class TriangulationData:
-    x: np.ndarray
-    y: np.ndarray
-    triangles: np.ndarray
-
-
-def build_triangulation(x: np.ndarray, y: np.ndarray) -> TriangulationData:
+def build_triangulation(x: np.ndarray, y: np.ndarray) -> Triangulation:
     points = np.column_stack([x, y])
     delaunay = Delaunay(points)
-    return TriangulationData(x=x, y=y, triangles=delaunay.simplices)
+    return Triangulation(x, y, triangles=delaunay.simplices)
 
 
 def interpolate_to_grid(
-    triangulation: TriangulationData,
+    triangulation: Triangulation,
     values: np.ndarray,
     grid_size: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
