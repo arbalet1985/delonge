@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tempfile
+import webbrowser
 import numpy as np
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -23,13 +23,15 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTabWidget,
     QToolButton,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
+import plotly.io as pio
 
 from core.data_loader import ColumnMap, auto_detect_columns, load_points, read_excel_headers
-from core.interpolation import build_triangulation
-from core.plotting import render_dual_maps, render_overlay_map
+from core.interpolation import TriangulationData, build_triangulation
+from core.plotly_renderer import PlotParams, render_dual_maps_plotly, render_overlay_plotly
 
 
 class MainWindow(QMainWindow):
@@ -40,10 +42,19 @@ class MainWindow(QMainWindow):
 
         self.file_path: str | None = None
         self.data = None
-        self.triangulation = None
+        self.triangulation: TriangulationData | None = None
 
-        self.main_canvas = FigureCanvas(Figure(figsize=(12, 5)))
-        self.overlay_canvas = FigureCanvas(Figure(figsize=(7, 5)))
+        self.main_info = QTextBrowser()
+        self.main_info.setOpenExternalLinks(True)
+        self.overlay_info = QTextBrowser()
+        self.overlay_info.setOpenExternalLinks(True)
+        self.main_html_path: Path | None = None
+        self.overlay_html_path: Path | None = None
+
+        self.current_fig_main = None
+        self.current_fig_overlay = None
+        self._plotly_tmp_dir = Path(tempfile.gettempdir()) / "pasha_plotly"
+        self._plotly_tmp_dir.mkdir(parents=True, exist_ok=True)
 
         self.column_combos: dict[str, QComboBox] = {}
         self.file_label = QLabel("Файл: не выбран")
@@ -216,9 +227,28 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         self.tabs = QTabWidget()
-        self.tabs.addTab(self.main_canvas, "Отдельные карты")
-        self.tabs.addTab(self.overlay_canvas, "Overlay")
+        self.tabs.addTab(self._build_browser_panel(kind="main"), "Отдельные карты")
+        self.tabs.addTab(self._build_browser_panel(kind="overlay"), "Overlay")
         layout.addWidget(self.tabs)
+        return panel
+
+    def _build_browser_panel(self, kind: str) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        btn = QPushButton("Открыть в браузере")
+        if kind == "overlay":
+            btn.clicked.connect(lambda: self._open_in_browser(self.overlay_html_path))
+            layout.addWidget(btn)
+            layout.addWidget(self.overlay_info, 1)
+            self._set_info_text(self.overlay_info, None, kind="overlay")
+        else:
+            btn.clicked.connect(lambda: self._open_in_browser(self.main_html_path))
+            layout.addWidget(btn)
+            layout.addWidget(self.main_info, 1)
+            self._set_info_text(self.main_info, None, kind="main")
         return panel
 
     def _apply_styles(self) -> None:
@@ -447,8 +477,61 @@ class MainWindow(QMainWindow):
             self._show_error(str(exc))
             return False
 
+    def _plot_params(self) -> PlotParams:
+        return PlotParams(
+            levels_count=self.levels_spin.value(),
+            smooth_contours=self.smooth_contours_checkbox.isChecked(),
+            smooth_sigma=self.smoothing_spin.value() / 10.0,
+            grid_size=260,
+            show_points=self.show_points_checkbox.isChecked(),
+            show_coordinates=self.show_coordinates_checkbox.isChecked(),
+            show_rn_labels=self.show_rn_checkbox.isChecked(),
+            point_size=self.point_size_spin.value(),
+            annotation_font_size=self.annotation_font_spin.value(),
+            show_scale_bar=self.show_scale_bar_checkbox.isChecked(),
+            show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
+            axis_margin=self.axis_margin_spin.value() / 100.0,
+            invert_x=self.invert_x_checkbox.isChecked(),
+            invert_y=self.invert_y_checkbox.isChecked(),
+            x_label=("Y" if self.swap_xy_checkbox.isChecked() else "X"),
+            y_label=("X" if self.swap_xy_checkbox.isChecked() else "Y"),
+            vertical_layout=self.horizontal_align_btn.isChecked(),
+        )
+
+    def _write_plot_html(self, fig, target: Path) -> None:
+        html = fig.to_html(
+            include_plotlyjs=True,
+            full_html=False,
+            config={"displayModeBar": True, "responsive": True},
+        )
+        target.write_text(html, encoding="utf-8")
+
+    def _open_in_browser(self, path: Path | None) -> None:
+        if path is None or not path.exists():
+            self._show_error("Сначала постройте график (HTML еще не создан).")
+            return
+        webbrowser.open(path.as_uri())
+
+    def _set_info_text(self, widget: QTextBrowser, path: Path | None, kind: str) -> None:
+        title = "Отдельные карты" if kind == "main" else "Overlay"
+        if path is None:
+            widget.setHtml(
+                f"<h3>{title}</h3>"
+                "<p>График будет открываться в системном браузере (QtWebEngine отключен из-за проблем GPU).</p>"
+                "<p>Нажмите «Построить карты…» или «Проверить наложение…», затем «Открыть в браузере».</p>"
+            )
+            return
+        widget.setHtml(
+            f"<h3>{title}</h3>"
+            f"<p>HTML файл: <code>{path}</code></p>"
+            f"<p><a href='{path.as_uri()}'>Открыть файл</a> (или нажмите кнопку выше)</p>"
+            "<p>При live-перерисовке файл обновляется — в браузере нажмите Refresh.</p>"
+        )
+
     def on_build_maps(self) -> None:
         if not self._ensure_data_loaded():
+            return
+        if self.triangulation is None:
             return
 
         ap = self.data["ap"].to_numpy(dtype=float)
@@ -456,37 +539,27 @@ class MainWindow(QMainWindow):
         rn_labels = None
         if "rn" in self.data.columns:
             rn_labels = [str(v) for v in self.data["rn"].tolist()]
-        axis_x_label = "Y" if self.swap_xy_checkbox.isChecked() else "X"
-        axis_y_label = "X" if self.swap_xy_checkbox.isChecked() else "Y"
-
-        fig = render_dual_maps(
+        params = self._plot_params()
+        fig = render_dual_maps_plotly(
             triangulation=self.triangulation,
             ap=ap,
             ac=ac,
-            levels_count=self.levels_spin.value(),
-            point_size=self.point_size_spin.value(),
-            enforce_mirror=self.enforce_mirror_checkbox.isChecked(),
-            smooth_contours=self.smooth_contours_checkbox.isChecked(),
-            smooth_sigma=self.smoothing_spin.value() / 10.0,
-            show_points=self.show_points_checkbox.isChecked(),
-            show_coordinates=self.show_coordinates_checkbox.isChecked(),
-            show_rn_labels=self.show_rn_checkbox.isChecked(),
+            params=params,
             rn_labels=rn_labels,
-            show_scale_bar=self.show_scale_bar_checkbox.isChecked(),
-            invert_x=self.invert_x_checkbox.isChecked(),
-            invert_y=self.invert_y_checkbox.isChecked(),
-            x_label=axis_x_label,
-            y_label=axis_y_label,
-            show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
-            vertical_layout=self.horizontal_align_btn.isChecked(),
-            annotation_font_size=self.annotation_font_spin.value(),
-            axis_margin=self.axis_margin_spin.value() / 100.0,
+            enforce_mirror=self.enforce_mirror_checkbox.isChecked(),
         )
-        self.main_canvas = self._replace_canvas(self.main_canvas, fig, "Отдельные карты", 0)
+        self.current_fig_main = fig
+        target = self._plotly_tmp_dir / "main.html"
+        self._write_plot_html(fig, target)
+        self.main_html_path = target
+        self._set_info_text(self.main_info, target, kind="main")
+        webbrowser.open(target.as_uri())
         self.tabs.setCurrentIndex(0)
 
     def on_build_overlay(self) -> None:
         if not self._ensure_data_loaded():
+            return
+        if self.triangulation is None:
             return
 
         ap = self.data["ap"].to_numpy(dtype=float)
@@ -495,36 +568,27 @@ class MainWindow(QMainWindow):
         if "rn" in self.data.columns:
             rn_labels = [str(v) for v in self.data["rn"].tolist()]
         alpha = self.alpha_slider.value() / 100.0
-        axis_x_label = "Y" if self.swap_xy_checkbox.isChecked() else "X"
-        axis_y_label = "X" if self.swap_xy_checkbox.isChecked() else "Y"
-        fig = render_overlay_map(
+        params = self._plot_params()
+        fig = render_overlay_plotly(
             triangulation=self.triangulation,
             ap=ap,
             ac=ac,
-            alpha=alpha,
-            levels_count=self.levels_spin.value(),
-            enforce_mirror=self.enforce_mirror_checkbox.isChecked(),
-            smooth_contours=self.smooth_contours_checkbox.isChecked(),
-            smooth_sigma=self.smoothing_spin.value() / 10.0,
-            show_points=self.show_points_checkbox.isChecked(),
-            show_coordinates=self.show_coordinates_checkbox.isChecked(),
-            show_rn_labels=self.show_rn_checkbox.isChecked(),
+            params=params,
             rn_labels=rn_labels,
-            show_scale_bar=self.show_scale_bar_checkbox.isChecked(),
-            invert_x=self.invert_x_checkbox.isChecked(),
-            invert_y=self.invert_y_checkbox.isChecked(),
-            x_label=axis_x_label,
-            y_label=axis_y_label,
-            show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
-            annotation_font_size=self.annotation_font_spin.value(),
-            axis_margin=self.axis_margin_spin.value() / 100.0,
+            enforce_mirror=self.enforce_mirror_checkbox.isChecked(),
+            alpha=alpha,
         )
-        self.overlay_canvas = self._replace_canvas(self.overlay_canvas, fig, "Overlay", 1)
+        self.current_fig_overlay = fig
+        target = self._plotly_tmp_dir / "overlay.html"
+        self._write_plot_html(fig, target)
+        self.overlay_html_path = target
+        self._set_info_text(self.overlay_info, target, kind="overlay")
+        webbrowser.open(target.as_uri())
         self.tabs.setCurrentIndex(1)
 
     def on_save_plot(self) -> None:
-        canvas = self.main_canvas if self.tabs.currentIndex() == 0 else self.overlay_canvas
-        if canvas.figure is None or len(canvas.figure.axes) == 0:
+        fig = self.current_fig_main if self.tabs.currentIndex() == 0 else self.current_fig_overlay
+        if fig is None:
             self._show_error("Сначала постройте график.")
             return
 
@@ -537,15 +601,18 @@ class MainWindow(QMainWindow):
         if not output_path:
             return
         try:
-            canvas.figure.savefig(output_path, dpi=220)
+            pio.write_image(fig, output_path, format="png", scale=2)
         except Exception as exc:  # noqa: BLE001
+            if "kaleido" in str(exc).lower():
+                self._show_error("Для экспорта PNG нужен пакет kaleido. Установите зависимости: pip install -r requirements.txt")
+                return
             self._show_error(f"Не удалось сохранить файл: {exc}")
             return
         QMessageBox.information(self, "Готово", f"Сохранено: {output_path}")
 
     def on_export_corel(self) -> None:
-        canvas = self.main_canvas if self.tabs.currentIndex() == 0 else self.overlay_canvas
-        if canvas.figure is None or len(canvas.figure.axes) == 0:
+        fig = self.current_fig_main if self.tabs.currentIndex() == 0 else self.current_fig_overlay
+        if fig is None:
             self._show_error("Сначала постройте график.")
             return
 
@@ -561,10 +628,8 @@ class MainWindow(QMainWindow):
         try:
             ext = Path(output_path).suffix.lower()
             if selected_filter.startswith("CorelDRAW") or ext == ".cdr":
-                # Direct CDR export is not supported by matplotlib.
-                # Save SVG as Corel-friendly vector instead.
                 svg_path = str(Path(output_path).with_suffix(".svg"))
-                canvas.figure.savefig(svg_path, format="svg")
+                pio.write_image(fig, svg_path, format="svg")
                 QMessageBox.information(
                     self,
                     "Экспорт Corel",
@@ -574,9 +639,12 @@ class MainWindow(QMainWindow):
                     ),
                 )
                 return
-
-            canvas.figure.savefig(output_path)
+            fmt = ext.lstrip(".") or "svg"
+            pio.write_image(fig, output_path, format=fmt)
         except Exception as exc:  # noqa: BLE001
+            if "kaleido" in str(exc).lower():
+                self._show_error("Для экспорта SVG/PDF/EPS нужен пакет kaleido. Установите зависимости: pip install -r requirements.txt")
+                return
             self._show_error(f"Не удалось экспортировать файл: {exc}")
             return
 
@@ -585,10 +653,4 @@ class MainWindow(QMainWindow):
     def _show_error(self, message: str) -> None:
         QMessageBox.critical(self, "Ошибка", message)
 
-    def _replace_canvas(self, old_canvas: FigureCanvas, figure: Figure, tab_title: str, tab_index: int) -> FigureCanvas:
-        new_canvas = FigureCanvas(figure)
-        self.tabs.removeTab(tab_index)
-        self.tabs.insertTab(tab_index, new_canvas, tab_title)
-        old_canvas.deleteLater()
-        new_canvas.draw()
-        return new_canvas
+    # Matplotlib canvas replacement is no longer used (Plotly is displayed in QWebEngineView).
