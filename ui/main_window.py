@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QColorDialog,
     QFileDialog,
     QFormLayout,
     QGridLayout,
@@ -41,6 +42,9 @@ class MainWindow(QMainWindow):
         self.file_path: str | None = None
         self.data = None
         self.triangulation = None
+
+        self.cmap_start = "#ffffff"
+        self.cmap_end = "#000000"
 
         self.main_canvas = FigureCanvas(Figure(figsize=(12, 5)))
         self.overlay_canvas = FigureCanvas(Figure(figsize=(7, 5)))
@@ -96,6 +100,15 @@ class MainWindow(QMainWindow):
         self.levels_spin.setRange(5, 40)
         self.levels_spin.setValue(20)
 
+        self.use_levels_step_checkbox = QCheckBox("Изолинии по шагу")
+        self.use_levels_step_checkbox.setChecked(False)
+
+        self.levels_step_spin = QDoubleSpinBox()
+        self.levels_step_spin.setRange(0.0001, 1_000_000.0)
+        self.levels_step_spin.setDecimals(4)
+        self.levels_step_spin.setSingleStep(0.1)
+        self.levels_step_spin.setValue(1.0)
+
         self.point_size_spin = QSpinBox()
         self.point_size_spin.setRange(5, 80)
         self.point_size_spin.setValue(18)
@@ -139,6 +152,19 @@ class MainWindow(QMainWindow):
         self.show_scale_bar_checkbox.setChecked(True)
         self.show_contour_lines_checkbox = QCheckBox("Показывать изолинии")
         self.show_contour_lines_checkbox.setChecked(True)
+
+        self.show_contour_labels_checkbox = QCheckBox("Подписывать изолинии")
+        self.show_contour_labels_checkbox.setChecked(False)
+
+        self.contour_label_font_spin = QSpinBox()
+        self.contour_label_font_spin.setRange(6, 20)
+        self.contour_label_font_spin.setValue(8)
+
+        self.cmap_start_btn = QPushButton("Цвет 1")
+        self.cmap_end_btn = QPushButton("Цвет 2")
+        self._sync_cmap_button_styles()
+        self.cmap_start_btn.clicked.connect(lambda: self._pick_cmap_color(which="start"))
+        self.cmap_end_btn.clicked.connect(lambda: self._pick_cmap_color(which="end"))
         self.invert_x_checkbox = QCheckBox("Инвертировать ось X")
         self.invert_x_checkbox.setChecked(False)
         self.invert_y_checkbox = QCheckBox("Инвертировать ось Y")
@@ -150,6 +176,8 @@ class MainWindow(QMainWindow):
 
         settings_layout.addWidget(QLabel("Уровни изолиний:"), 0, 0)
         settings_layout.addWidget(self.levels_spin, 0, 1)
+        settings_layout.addWidget(self.use_levels_step_checkbox, 0, 2)
+        settings_layout.addWidget(self.levels_step_spin, 1, 2)
         settings_layout.addWidget(QLabel("Размер точек:"), 1, 0)
         settings_layout.addWidget(self.point_size_spin, 1, 1)
         settings_layout.addWidget(QLabel("Шрифт подписей (rn/коорд.):"), 2, 0)
@@ -163,16 +191,27 @@ class MainWindow(QMainWindow):
         settings_layout.addWidget(QLabel("Прозрачность overlay:"), 6, 0)
         settings_layout.addWidget(self.alpha_slider, 6, 1)
         settings_layout.addWidget(self.alpha_label, 6, 2)
-        settings_layout.addWidget(self.smooth_contours_checkbox, 7, 0, 1, 3)
-        settings_layout.addWidget(self.show_points_checkbox, 8, 0, 1, 3)
-        settings_layout.addWidget(self.show_coordinates_checkbox, 9, 0, 1, 3)
-        settings_layout.addWidget(self.show_rn_checkbox, 10, 0, 1, 3)
-        settings_layout.addWidget(self.show_scale_bar_checkbox, 11, 0, 1, 3)
-        settings_layout.addWidget(self.show_contour_lines_checkbox, 12, 0, 1, 3)
-        settings_layout.addWidget(self.invert_x_checkbox, 13, 0, 1, 3)
-        settings_layout.addWidget(self.invert_y_checkbox, 14, 0, 1, 3)
-        settings_layout.addWidget(self.swap_xy_checkbox, 15, 0, 1, 3)
-        settings_layout.addWidget(self.enforce_mirror_checkbox, 16, 0, 1, 3)
+        settings_layout.addWidget(QLabel("Градиент:"), 7, 0)
+        cmap_row = QWidget()
+        cmap_row_layout = QHBoxLayout(cmap_row)
+        cmap_row_layout.setContentsMargins(0, 0, 0, 0)
+        cmap_row_layout.setSpacing(8)
+        cmap_row_layout.addWidget(self.cmap_start_btn)
+        cmap_row_layout.addWidget(self.cmap_end_btn)
+        settings_layout.addWidget(cmap_row, 7, 1, 1, 2)
+        settings_layout.addWidget(self.smooth_contours_checkbox, 8, 0, 1, 3)
+        settings_layout.addWidget(self.show_points_checkbox, 9, 0, 1, 3)
+        settings_layout.addWidget(self.show_coordinates_checkbox, 10, 0, 1, 3)
+        settings_layout.addWidget(self.show_rn_checkbox, 11, 0, 1, 3)
+        settings_layout.addWidget(self.show_scale_bar_checkbox, 12, 0, 1, 3)
+        settings_layout.addWidget(self.show_contour_lines_checkbox, 13, 0, 1, 3)
+        settings_layout.addWidget(self.show_contour_labels_checkbox, 14, 0, 1, 3)
+        settings_layout.addWidget(QLabel("Шрифт подписей изолиний:"), 15, 0)
+        settings_layout.addWidget(self.contour_label_font_spin, 15, 1)
+        settings_layout.addWidget(self.invert_x_checkbox, 16, 0, 1, 3)
+        settings_layout.addWidget(self.invert_y_checkbox, 17, 0, 1, 3)
+        settings_layout.addWidget(self.swap_xy_checkbox, 18, 0, 1, 3)
+        settings_layout.addWidget(self.enforce_mirror_checkbox, 19, 0, 1, 3)
 
         self.toggle_settings_btn = QToolButton()
         self.toggle_settings_btn.setText("Свернуть параметры")
@@ -244,6 +283,22 @@ class MainWindow(QMainWindow):
             """
         )
 
+    def _sync_cmap_button_styles(self) -> None:
+        self.cmap_start_btn.setStyleSheet(f"background: {self.cmap_start}; color: #000; border-radius: 6px; padding: 8px 10px;")
+        self.cmap_end_btn.setStyleSheet(f"background: {self.cmap_end}; color: #000; border-radius: 6px; padding: 8px 10px;")
+
+    def _pick_cmap_color(self, which: str) -> None:
+        initial = self.cmap_start if which == "start" else self.cmap_end
+        color = QColorDialog.getColor(initial=Qt.white, parent=self, title="Выберите цвет")
+        if not color.isValid():
+            return
+        if which == "start":
+            self.cmap_start = color.name()
+        else:
+            self.cmap_end = color.name()
+        self._sync_cmap_button_styles()
+        self._redraw_current_view_if_ready()
+
     def _sync_alpha_text(self) -> None:
         self.alpha_label.setText(f"{self.alpha_slider.value() / 100:.2f}")
 
@@ -255,6 +310,8 @@ class MainWindow(QMainWindow):
             self.show_rn_checkbox,
             self.show_scale_bar_checkbox,
             self.show_contour_lines_checkbox,
+            self.show_contour_labels_checkbox,
+            self.use_levels_step_checkbox,
             self.invert_x_checkbox,
             self.invert_y_checkbox,
             self.swap_xy_checkbox,
@@ -266,8 +323,10 @@ class MainWindow(QMainWindow):
         self.horizontal_align_btn.toggled.connect(self._redraw_current_view_if_ready)
         self.alpha_slider.sliderReleased.connect(self._redraw_current_view_if_ready)
         self.levels_spin.valueChanged.connect(self._redraw_current_view_if_ready)
+        self.levels_step_spin.valueChanged.connect(self._redraw_current_view_if_ready)
         self.point_size_spin.valueChanged.connect(self._redraw_current_view_if_ready)
         self.annotation_font_spin.valueChanged.connect(self._redraw_current_view_if_ready)
+        self.contour_label_font_spin.valueChanged.connect(self._redraw_current_view_if_ready)
         self.rotation_deg_spin.valueChanged.connect(self._redraw_current_view_if_ready)
         self.axis_margin_spin.valueChanged.connect(self._redraw_current_view_if_ready)
         self.smoothing_spin.valueChanged.connect(self._redraw_current_view_if_ready)
@@ -459,11 +518,13 @@ class MainWindow(QMainWindow):
         axis_x_label = "Y" if self.swap_xy_checkbox.isChecked() else "X"
         axis_y_label = "X" if self.swap_xy_checkbox.isChecked() else "Y"
 
+        levels_step = self.levels_step_spin.value() if self.use_levels_step_checkbox.isChecked() else None
         fig = render_dual_maps(
             triangulation=self.triangulation,
             ap=ap,
             ac=ac,
             levels_count=self.levels_spin.value(),
+            levels_step=levels_step,
             point_size=self.point_size_spin.value(),
             enforce_mirror=self.enforce_mirror_checkbox.isChecked(),
             smooth_contours=self.smooth_contours_checkbox.isChecked(),
@@ -478,9 +539,13 @@ class MainWindow(QMainWindow):
             x_label=axis_x_label,
             y_label=axis_y_label,
             show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
+            show_contour_labels=self.show_contour_labels_checkbox.isChecked(),
+            contour_label_font_size=self.contour_label_font_spin.value(),
             vertical_layout=self.horizontal_align_btn.isChecked(),
             annotation_font_size=self.annotation_font_spin.value(),
             axis_margin=self.axis_margin_spin.value() / 100.0,
+            cmap_start=self.cmap_start,
+            cmap_end=self.cmap_end,
         )
         self.main_canvas = self._replace_canvas(self.main_canvas, fig, "Отдельные карты", 0)
         self.tabs.setCurrentIndex(0)
@@ -497,12 +562,14 @@ class MainWindow(QMainWindow):
         alpha = self.alpha_slider.value() / 100.0
         axis_x_label = "Y" if self.swap_xy_checkbox.isChecked() else "X"
         axis_y_label = "X" if self.swap_xy_checkbox.isChecked() else "Y"
+        levels_step = self.levels_step_spin.value() if self.use_levels_step_checkbox.isChecked() else None
         fig = render_overlay_map(
             triangulation=self.triangulation,
             ap=ap,
             ac=ac,
             alpha=alpha,
             levels_count=self.levels_spin.value(),
+            levels_step=levels_step,
             enforce_mirror=self.enforce_mirror_checkbox.isChecked(),
             smooth_contours=self.smooth_contours_checkbox.isChecked(),
             smooth_sigma=self.smoothing_spin.value() / 10.0,
@@ -516,8 +583,12 @@ class MainWindow(QMainWindow):
             x_label=axis_x_label,
             y_label=axis_y_label,
             show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
+            show_contour_labels=self.show_contour_labels_checkbox.isChecked(),
+            contour_label_font_size=self.contour_label_font_spin.value(),
             annotation_font_size=self.annotation_font_spin.value(),
             axis_margin=self.axis_margin_spin.value() / 100.0,
+            cmap_start=self.cmap_start,
+            cmap_end=self.cmap_end,
         )
         self.overlay_canvas = self._replace_canvas(self.overlay_canvas, fig, "Overlay", 1)
         self.tabs.setCurrentIndex(1)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 from matplotlib import pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 from matplotlib.ticker import ScalarFormatter
 from matplotlib.tri import LinearTriInterpolator, Triangulation
@@ -40,6 +41,31 @@ def _apply_axis_inversion(ax, invert_x: bool, invert_y: bool) -> None:
         ax.invert_xaxis()
     if invert_y:
         ax.invert_yaxis()
+
+
+def _build_cmap(start_hex: str, end_hex: str) -> LinearSegmentedColormap:
+    return LinearSegmentedColormap.from_list("custom_gray", [start_hex, end_hex], N=256)
+
+
+def _compute_levels(
+    ap_plot: np.ndarray,
+    ac_plot: np.ndarray,
+    levels_count: int,
+    levels_step: float | None,
+) -> tuple[np.ndarray, float, float]:
+    if levels_step is None or levels_step <= 0:
+        return build_levels(ap_plot, ac_plot, levels_count)
+
+    vmin = float(min(np.min(ap_plot), np.min(ac_plot)))
+    vmax = float(max(np.max(ap_plot), np.max(ac_plot)))
+    if vmin == vmax:
+        vmax = vmin + levels_step
+
+    step = float(levels_step)
+    levels = np.arange(vmin, vmax + step * 0.999, step)
+    if levels.size < 2:
+        return build_levels(ap_plot, ac_plot, levels_count)
+    return levels, vmin, vmax
 
 
 def _draw_points_and_labels(
@@ -189,6 +215,7 @@ def render_dual_maps(
     ap: np.ndarray,
     ac: np.ndarray,
     levels_count: int = 10,
+    levels_step: float | None = None,
     point_size: int = 18,
     enforce_mirror: bool = True,
     smooth_contours: bool = True,
@@ -204,29 +231,37 @@ def render_dual_maps(
     x_label: str = "X",
     y_label: str = "Y",
     show_contour_lines: bool = True,
+    show_contour_labels: bool = False,
+    contour_label_font_size: int = 8,
+    cmap_start: str = "#ffffff",
+    cmap_end: str = "#000000",
     vertical_layout: bool = False,
     annotation_font_size: int = 7,
     axis_margin: float = 0.05,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
-    levels, vmin, vmax = build_levels(ap_plot, ac_plot, levels_count)
+    levels, vmin, vmax = _compute_levels(ap_plot, ac_plot, levels_count=levels_count, levels_step=levels_step)
 
     if vertical_layout:
         fig, axes = plt.subplots(2, 1, figsize=(8, 10), constrained_layout=True)
     else:
         fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
-    cmap = "Greys"
-    overlay_cmap_ac = "Greys_r"
+    cmap = _build_cmap(cmap_start, cmap_end)
+    cmap_ac = cmap.reversed()
 
     if smooth_contours:
         xg_ap, yg_ap, zg_ap = _interpolate_to_grid(triangulation, ap_plot, grid_size=grid_size, smooth_sigma=smooth_sigma)
         cf_ap = axes[0].contourf(xg_ap, yg_ap, zg_ap, levels=levels, cmap=cmap, vmin=vmin, vmax=vmax)
         if show_contour_lines:
-            axes[0].contour(xg_ap, yg_ap, zg_ap, levels=levels, colors="#101010", linewidths=0.9, alpha=1.0)
+            cs = axes[0].contour(xg_ap, yg_ap, zg_ap, levels=levels, colors="#101010", linewidths=0.9, alpha=1.0)
+            if show_contour_labels:
+                axes[0].clabel(cs, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
     else:
         cf_ap = axes[0].tricontourf(triangulation, ap_plot, levels=levels, cmap=cmap, vmin=vmin, vmax=vmax)
         if show_contour_lines:
-            axes[0].tricontour(triangulation, ap_plot, levels=levels, colors="#101010", linewidths=0.9, alpha=1.0)
+            cs = axes[0].tricontour(triangulation, ap_plot, levels=levels, colors="#101010", linewidths=0.9, alpha=1.0)
+            if show_contour_labels:
+                axes[0].clabel(cs, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
     _draw_points_and_labels(
         axes[0],
         triangulation.x,
@@ -245,13 +280,17 @@ def render_dual_maps(
 
     if smooth_contours:
         xg_ac, yg_ac, zg_ac = _interpolate_to_grid(triangulation, ac_plot, grid_size=grid_size, smooth_sigma=smooth_sigma)
-        cf_ac = axes[1].contourf(xg_ac, yg_ac, zg_ac, levels=levels, cmap=cmap, vmin=vmin, vmax=vmax)
+        cf_ac = axes[1].contourf(xg_ac, yg_ac, zg_ac, levels=levels, cmap=cmap_ac, vmin=vmin, vmax=vmax)
         if show_contour_lines:
-            axes[1].contour(xg_ac, yg_ac, zg_ac, levels=levels, colors="#101010", linewidths=0.9, alpha=1.0)
+            cs = axes[1].contour(xg_ac, yg_ac, zg_ac, levels=levels, colors="#101010", linewidths=0.9, alpha=1.0)
+            if show_contour_labels:
+                axes[1].clabel(cs, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
     else:
-        cf_ac = axes[1].tricontourf(triangulation, ac_plot, levels=levels, cmap=cmap, vmin=vmin, vmax=vmax)
+        cf_ac = axes[1].tricontourf(triangulation, ac_plot, levels=levels, cmap=cmap_ac, vmin=vmin, vmax=vmax)
         if show_contour_lines:
-            axes[1].tricontour(triangulation, ac_plot, levels=levels, colors="#101010", linewidths=0.9, alpha=1.0)
+            cs = axes[1].tricontour(triangulation, ac_plot, levels=levels, colors="#101010", linewidths=0.9, alpha=1.0)
+            if show_contour_labels:
+                axes[1].clabel(cs, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
     _draw_points_and_labels(
         axes[1],
         triangulation.x,
@@ -277,6 +316,7 @@ def render_overlay_map(
     ac: np.ndarray,
     alpha: float = 0.5,
     levels_count: int = 10,
+    levels_step: float | None = None,
     enforce_mirror: bool = True,
     smooth_contours: bool = True,
     smooth_sigma: float = 0.6,
@@ -291,15 +331,19 @@ def render_overlay_map(
     x_label: str = "X",
     y_label: str = "Y",
     show_contour_lines: bool = True,
+    show_contour_labels: bool = False,
+    contour_label_font_size: int = 8,
     annotation_font_size: int = 7,
     axis_margin: float = 0.05,
+    cmap_start: str = "#ffffff",
+    cmap_end: str = "#000000",
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
-    levels, vmin, vmax = build_levels(ap_plot, ac_plot, levels_count)
+    levels, vmin, vmax = _compute_levels(ap_plot, ac_plot, levels_count=levels_count, levels_step=levels_step)
 
     fig, ax = plt.subplots(1, 1, figsize=(7, 5), constrained_layout=True)
-    cmap = "Greys"
-    overlay_cmap_ac = "Greys_r"
+    cmap = _build_cmap(cmap_start, cmap_end)
+    overlay_cmap_ac = cmap.reversed()
 
     if smooth_contours:
         xg_ap, yg_ap, zg_ap = _interpolate_to_grid(triangulation, ap_plot, grid_size=grid_size, smooth_sigma=smooth_sigma)
@@ -329,8 +373,11 @@ def render_overlay_map(
             antialiased=False,
         )
         if show_contour_lines:
-            ax.contour(xg_ap, yg_ap, zg_ap, levels=levels, colors="#000000", linewidths=1.2, alpha=1.0)
-            ax.contour(xg_ac, yg_ac, zg_ac, levels=levels, colors="#222222", linewidths=1.1, alpha=1.0, linestyles="dashed")
+            cs1 = ax.contour(xg_ap, yg_ap, zg_ap, levels=levels, colors="#000000", linewidths=1.2, alpha=1.0)
+            cs2 = ax.contour(xg_ac, yg_ac, zg_ac, levels=levels, colors="#222222", linewidths=1.1, alpha=1.0, linestyles="dashed")
+            if show_contour_labels:
+                ax.clabel(cs1, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
+                ax.clabel(cs2, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
     else:
         ap_fill_alpha = max(0.2, min(0.85, alpha * 0.8))
         ac_fill_alpha = max(0.2, min(0.85, (1.0 - alpha) * 0.8))
@@ -355,8 +402,11 @@ def render_overlay_map(
             antialiased=False,
         )
         if show_contour_lines:
-            ax.tricontour(triangulation, ap_plot, levels=levels, colors="#000000", linewidths=1.2, alpha=1.0)
-            ax.tricontour(triangulation, ac_plot, levels=levels, colors="#222222", linewidths=1.1, alpha=1.0, linestyles="dashed")
+            cs1 = ax.tricontour(triangulation, ap_plot, levels=levels, colors="#000000", linewidths=1.2, alpha=1.0)
+            cs2 = ax.tricontour(triangulation, ac_plot, levels=levels, colors="#222222", linewidths=1.1, alpha=1.0, linestyles="dashed")
+            if show_contour_labels:
+                ax.clabel(cs1, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
+                ax.clabel(cs2, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
     _draw_points_and_labels(
         ax,
         triangulation.x,
