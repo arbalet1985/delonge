@@ -5,11 +5,9 @@ from matplotlib import pyplot as plt
 from matplotlib import transforms as mtransforms
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
-from matplotlib.path import Path as MPath
 from matplotlib.ticker import FuncFormatter, MaxNLocator, ScalarFormatter
 from matplotlib.tri import LinearTriInterpolator, Triangulation
 from scipy.ndimage import gaussian_filter
-from scipy.spatial import ConvexHull
 
 from core.basemap import add_satellite_basemap, compute_mercator_square_extent, web_mercator_to_lon_lat
 from core.interpolation import build_levels, mirror_fields
@@ -43,32 +41,6 @@ def _view_data_transform(
     return rot + ax.transData
 
 
-def _triangulation_hull_path(triangulation: Triangulation) -> MPath:
-    """Выпуклая оболочка точек сетки (контур области данных)."""
-    x, y = triangulation.x, triangulation.y
-    pts = np.column_stack((x, y))
-    n = pts.shape[0]
-    if n < 1:
-        return MPath(np.zeros((1, 2)), closed=True)
-    if n < 3:
-        cx, cy = float(np.mean(x)), float(np.mean(y))
-        pad = max(float(np.ptp(x)) if n > 1 else 1.0, float(np.ptp(y)) if n > 1 else 1.0) * 0.5 + 5.0
-        q = np.array(
-            [
-                [cx - pad, cy - pad],
-                [cx + pad, cy - pad],
-                [cx + pad, cy + pad],
-                [cx - pad, cy + pad],
-                [cx - pad, cy - pad],
-            ]
-        )
-        return MPath(q, closed=True)
-    hull = ConvexHull(pts)
-    v = pts[hull.vertices]
-    closed = np.vstack([v, v[0:1]])
-    return MPath(closed, closed=True)
-
-
 def _mercator_lon_formatter(ax):
     def fmt(xv: float, pos: int | None) -> str:
         y0, y1 = ax.get_ylim()
@@ -94,6 +66,8 @@ def _style_axis_mercator_degrees(
     title: str,
     axis_margin: float = 0.05,
     skip_margins: bool = False,
+    axis_tick_fontsize_x: float = 9.0,
+    axis_tick_fontsize_y: float = 9.0,
 ) -> None:
     ax.set_title(title, fontsize=12, pad=8)
     ax.set_xlabel("Долгота (°)")
@@ -102,6 +76,8 @@ def _style_axis_mercator_degrees(
     ax.yaxis.set_major_locator(MaxNLocator(nbins=6, prune="both"))
     ax.xaxis.set_major_formatter(FuncFormatter(_mercator_lon_formatter(ax)))
     ax.yaxis.set_major_formatter(FuncFormatter(_mercator_lat_formatter(ax)))
+    ax.tick_params(axis="x", labelsize=float(axis_tick_fontsize_x))
+    ax.tick_params(axis="y", labelsize=float(axis_tick_fontsize_y))
     ax.use_sticky_edges = False
     if not skip_margins:
         margin = float(np.clip(axis_margin, 0.0, 0.3))
@@ -116,6 +92,8 @@ def _style_axis(
     y_label: str = "Y",
     axis_margin: float = 0.05,
     skip_margins: bool = False,
+    axis_tick_fontsize_x: float = 9.0,
+    axis_tick_fontsize_y: float = 9.0,
 ) -> None:
     ax.set_title(title, fontsize=12, pad=8)
     ax.set_xlabel(x_label)
@@ -127,6 +105,8 @@ def _style_axis(
     ax.xaxis.set_major_formatter(x_fmt)
     ax.yaxis.set_major_formatter(y_fmt)
     ax.ticklabel_format(axis="both", style="plain", useOffset=False)
+    ax.tick_params(axis="x", labelsize=float(axis_tick_fontsize_x))
+    ax.tick_params(axis="y", labelsize=float(axis_tick_fontsize_y))
     margin = float(np.clip(axis_margin, 0.0, 0.3))
     # Contour/contourf artists can set sticky edges that effectively ignore margins.
     # Disable them so user-configured padding is always visible.
@@ -381,6 +361,8 @@ def render_dual_maps(
     coordinate_degrees_lon_lat: tuple[np.ndarray, np.ndarray] | None = None,
     google_maps_api_key: str | None = None,
     view_rotation_deg: float = 0.0,
+    axis_tick_fontsize_x: float = 9.0,
+    axis_tick_fontsize_y: float = 9.0,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
     levels, vmin, vmax = _compute_levels(ap_plot, ac_plot, levels_count=levels_count, levels_step=levels_step)
@@ -391,14 +373,10 @@ def render_dual_maps(
         # constrained_layout breaks with dual colorbars + basemap (axes collapse to zero width).
         fig, axes = plt.subplots(1, 2, figsize=(12, 5.5), constrained_layout=False)
     cmap = _build_cmap(cmap_start, cmap_end)
-    cmap_ac = cmap.reversed()
 
     fill_alpha = float(np.clip(map_layer_alpha, 0.05, 1.0)) if basemap_enabled else 1.0
 
     cx, cy = _mercator_rotation_center(triangulation, axis_margin)
-    clip_path: MPath | None = None
-    if basemap_enabled and abs(view_rotation_deg) > 1e-6:
-        clip_path = _triangulation_hull_path(triangulation)
 
     tfm0 = _view_data_transform(axes[0], cx, cy, view_rotation_deg)
     tfm1 = _view_data_transform(axes[1], cx, cy, view_rotation_deg)
@@ -415,8 +393,7 @@ def render_dual_maps(
             basemap_source_key=basemap_source,
             google_maps_api_key=google_maps_api_key,
             display_transform=tfm0,
-            clip_path=clip_path,
-            clip_transform=tfm0,
+            view_rotation_deg=view_rotation_deg,
         )
         add_satellite_basemap(
             axes[1],
@@ -427,8 +404,7 @@ def render_dual_maps(
             basemap_source_key=basemap_source,
             google_maps_api_key=google_maps_api_key,
             display_transform=tfm1,
-            clip_path=clip_path,
-            clip_transform=tfm1,
+            view_rotation_deg=view_rotation_deg,
         )
 
     if smooth_contours:
@@ -509,6 +485,8 @@ def render_dual_maps(
             "Карта Ap",
             axis_margin=axis_margin,
             skip_margins=basemap_enabled,
+            axis_tick_fontsize_x=axis_tick_fontsize_x,
+            axis_tick_fontsize_y=axis_tick_fontsize_y,
         )
     else:
         _style_axis(
@@ -518,6 +496,8 @@ def render_dual_maps(
             y_label=y_label,
             axis_margin=axis_margin,
             skip_margins=basemap_enabled,
+            axis_tick_fontsize_x=axis_tick_fontsize_x,
+            axis_tick_fontsize_y=axis_tick_fontsize_y,
         )
     _apply_axis_inversion(axes[0], invert_x=invert_x, invert_y=invert_y)
     fig.colorbar(cf_ap, ax=axes[0], location="right", shrink=0.95)
@@ -529,7 +509,7 @@ def render_dual_maps(
             yg_ac,
             zg_ac,
             levels=levels,
-            cmap=cmap_ac,
+            cmap=cmap,
             vmin=vmin,
             vmax=vmax,
             alpha=fill_alpha,
@@ -554,7 +534,7 @@ def render_dual_maps(
             triangulation,
             ac_plot,
             levels=levels,
-            cmap=cmap_ac,
+            cmap=cmap,
             vmin=vmin,
             vmax=vmax,
             alpha=fill_alpha,
@@ -600,6 +580,8 @@ def render_dual_maps(
             "Карта Ac",
             axis_margin=axis_margin,
             skip_margins=basemap_enabled,
+            axis_tick_fontsize_x=axis_tick_fontsize_x,
+            axis_tick_fontsize_y=axis_tick_fontsize_y,
         )
     else:
         _style_axis(
@@ -609,6 +591,8 @@ def render_dual_maps(
             y_label=y_label,
             axis_margin=axis_margin,
             skip_margins=basemap_enabled,
+            axis_tick_fontsize_x=axis_tick_fontsize_x,
+            axis_tick_fontsize_y=axis_tick_fontsize_y,
         )
     _apply_axis_inversion(axes[1], invert_x=invert_x, invert_y=invert_y)
     fig.colorbar(cf_ac, ax=axes[1], location="right", shrink=0.95)
@@ -656,20 +640,18 @@ def render_overlay_map(
     coordinate_degrees_lon_lat: tuple[np.ndarray, np.ndarray] | None = None,
     google_maps_api_key: str | None = None,
     view_rotation_deg: float = 0.0,
+    axis_tick_fontsize_x: float = 9.0,
+    axis_tick_fontsize_y: float = 9.0,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
     levels, vmin, vmax = _compute_levels(ap_plot, ac_plot, levels_count=levels_count, levels_step=levels_step)
 
     fig, ax = plt.subplots(1, 1, figsize=(7, 5), constrained_layout=False)
     cmap = _build_cmap(cmap_start, cmap_end)
-    overlay_cmap_ac = cmap.reversed()
 
     map_alpha_factor = float(np.clip(map_layer_alpha, 0.05, 1.0)) if basemap_enabled else 1.0
 
     cx, cy = _mercator_rotation_center(triangulation, axis_margin)
-    clip_path: MPath | None = None
-    if basemap_enabled and abs(view_rotation_deg) > 1e-6:
-        clip_path = _triangulation_hull_path(triangulation)
     tfm = _view_data_transform(ax, cx, cy, view_rotation_deg)
     kw = _tfm_kw(tfm)
 
@@ -683,8 +665,7 @@ def render_overlay_map(
             basemap_source_key=basemap_source,
             google_maps_api_key=google_maps_api_key,
             display_transform=tfm,
-            clip_path=clip_path,
-            clip_transform=tfm,
+            view_rotation_deg=view_rotation_deg,
         )
 
     if smooth_contours:
@@ -710,7 +691,7 @@ def render_overlay_map(
             yg_ac,
             zg_ac,
             levels=levels,
-            cmap=overlay_cmap_ac,
+            cmap=cmap,
             vmin=vmin,
             vmax=vmax,
             alpha=ac_fill_alpha,
@@ -756,7 +737,7 @@ def render_overlay_map(
             triangulation,
             ac_plot,
             levels=levels,
-            cmap=overlay_cmap_ac,
+            cmap=cmap,
             vmin=vmin,
             vmax=vmax,
             alpha=ac_fill_alpha,
@@ -809,6 +790,8 @@ def render_overlay_map(
             "Overlay Ap/Ac (проверка совпадения изолиний)",
             axis_margin=axis_margin,
             skip_margins=basemap_enabled,
+            axis_tick_fontsize_x=axis_tick_fontsize_x,
+            axis_tick_fontsize_y=axis_tick_fontsize_y,
         )
     else:
         _style_axis(
@@ -818,6 +801,8 @@ def render_overlay_map(
             y_label=y_label,
             axis_margin=axis_margin,
             skip_margins=basemap_enabled,
+            axis_tick_fontsize_x=axis_tick_fontsize_x,
+            axis_tick_fontsize_y=axis_tick_fontsize_y,
         )
     _apply_axis_inversion(ax, invert_x=invert_x, invert_y=invert_y)
 

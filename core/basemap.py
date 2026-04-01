@@ -119,6 +119,30 @@ def compute_mercator_square_extent(
     return xlim, ylim
 
 
+def view_rotation_basemap_extent_scale(view_rotation_deg: float) -> float:
+    """При повороте вида квадрат подложки в экранных координатах нужно больше «запаса» в данных.
+
+    Для квадрата со стороной :math:`L`, повёрнутого на угол θ, ось-ориентированный охват
+    имеет сторону :math:`L(|\\cos\\theta|+|\\sin\\theta|)`. Без увеличения extent тайлы
+    не покрывают углы прямоугольника осей (белые треугольники).
+    """
+    rad = np.radians(float(view_rotation_deg))
+    return float(max(1.0, abs(np.cos(rad)) + abs(np.sin(rad))))
+
+
+def expand_mercator_square_extent(
+    xlim: tuple[float, float],
+    ylim: tuple[float, float],
+    scale: float,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Тот же центр, полуширина квадрата умножена на ``scale`` (≥ 1)."""
+    scale = float(max(1.0, scale))
+    xc = 0.5 * (xlim[0] + xlim[1])
+    yc = 0.5 * (ylim[0] + ylim[1])
+    half = 0.5 * (xlim[1] - xlim[0]) * scale
+    return (xc - half, xc + half), (yc - half, yc + half)
+
+
 def _imread_image_bytes(data: bytes) -> np.ndarray:
     """Декодирует PNG/JPEG/WebP и т.д. Yandex для спутника часто отдаёт JPEG; без Pillow
     matplotlib умеет только встроенный PNG — отсюда ошибка «не PNG file»."""
@@ -195,18 +219,22 @@ def add_google_hybrid_static_basemap(
     display_transform: "Transform | None" = None,
     clip_path: "MplPath | None" = None,
     clip_transform: "Transform | None" = None,
+    view_rotation_deg: float = 0.0,
 ) -> None:
     """Hybrid (satellite + labels) via official Static Maps API; axes in EPSG:3857."""
-    xlim, ylim = compute_mercator_square_extent(x, y, axis_margin=axis_margin)
-    ax.set_xlim(*xlim)
-    ax.set_ylim(*ylim)
+    inner_xlim, inner_ylim = compute_mercator_square_extent(x, y, axis_margin=axis_margin)
+    k = view_rotation_basemap_extent_scale(view_rotation_deg)
+    fetch_xlim, fetch_ylim = expand_mercator_square_extent(inner_xlim, inner_ylim, k)
+
+    ax.set_xlim(*inner_xlim)
+    ax.set_ylim(*inner_ylim)
     ax.set_aspect("auto")
 
     corners_e_n = [
-        (xlim[0], ylim[0]),
-        (xlim[0], ylim[1]),
-        (xlim[1], ylim[0]),
-        (xlim[1], ylim[1]),
+        (fetch_xlim[0], fetch_ylim[0]),
+        (fetch_xlim[0], fetch_ylim[1]),
+        (fetch_xlim[1], fetch_ylim[0]),
+        (fetch_xlim[1], fetch_ylim[1]),
     ]
     lon_c, lat_c = web_mercator_to_lon_lat(
         np.array([c[0] for c in corners_e_n], dtype=float),
@@ -220,7 +248,7 @@ def add_google_hybrid_static_basemap(
     tfm = display_transform if display_transform is not None else ax.transData
     im = ax.imshow(
         img,
-        extent=(xlim[0], xlim[1], ylim[0], ylim[1]),
+        extent=(fetch_xlim[0], fetch_xlim[1], fetch_ylim[0], fetch_ylim[1]),
         origin="upper",
         zorder=zorder,
         aspect="auto",
@@ -229,6 +257,8 @@ def add_google_hybrid_static_basemap(
     if clip_path is not None:
         ct = clip_transform if clip_transform is not None else tfm
         im.set_clip_path(clip_path, transform=ct)
+    ax.set_xlim(*inner_xlim)
+    ax.set_ylim(*inner_ylim)
     ax.set_aspect("auto")
 
 
@@ -275,25 +305,32 @@ def add_yandex_static_basemap(
     display_transform: "Transform | None" = None,
     clip_path: "MplPath | None" = None,
     clip_transform: "Transform | None" = None,
+    view_rotation_deg: float = 0.0,
 ) -> None:
     """Подложка через Yandex Static API (схема ``map`` или гибрид ``sat,skl``), оси EPSG:3857."""
-    xlim, ylim = compute_mercator_square_extent(x, y, axis_margin=axis_margin)
-    ax.set_xlim(*xlim)
-    ax.set_ylim(*ylim)
+    inner_xlim, inner_ylim = compute_mercator_square_extent(x, y, axis_margin=axis_margin)
+    k = view_rotation_basemap_extent_scale(view_rotation_deg)
+    fetch_xlim, fetch_ylim = expand_mercator_square_extent(inner_xlim, inner_ylim, k)
+
+    ax.set_xlim(*inner_xlim)
+    ax.set_ylim(*inner_ylim)
     ax.set_aspect("auto")
 
-    lon_min, lon_max, lat_min, lat_max = _lon_lat_bbox_from_mercator_square(xlim, ylim)
+    lon_min, lon_max, lat_min, lat_max = _lon_lat_bbox_from_mercator_square(fetch_xlim, fetch_ylim)
     lon_span = max(lon_max - lon_min, 1e-5)
     lat_span = max(lat_max - lat_min, 1e-5)
     lon_c = 0.5 * (lon_min + lon_max)
     lat_c = 0.5 * (lat_min + lat_max)
 
-    raw = _fetch_yandex_static_png(lon_c, lat_c, lon_span, lat_span, layer=layer)
+    w = min(650, max(1, int(650 * min(k, 2.0))))
+    h = min(450, max(1, int(450 * min(k, 2.0))))
+
+    raw = _fetch_yandex_static_png(lon_c, lat_c, lon_span, lat_span, layer=layer, width=w, height=h)
     img = _imread_image_bytes(raw)
     tfm = display_transform if display_transform is not None else ax.transData
     im = ax.imshow(
         img,
-        extent=(xlim[0], xlim[1], ylim[0], ylim[1]),
+        extent=(fetch_xlim[0], fetch_xlim[1], fetch_ylim[0], fetch_ylim[1]),
         origin="upper",
         zorder=zorder,
         aspect="auto",
@@ -302,6 +339,8 @@ def add_yandex_static_basemap(
     if clip_path is not None:
         ct = clip_transform if clip_transform is not None else tfm
         im.set_clip_path(clip_path, transform=ct)
+    ax.set_xlim(*inner_xlim)
+    ax.set_ylim(*inner_ylim)
     ax.set_aspect("auto")
 
 
@@ -318,6 +357,7 @@ def add_satellite_basemap(
     display_transform: "Transform | None" = None,
     clip_path: "MplPath | None" = None,
     clip_transform: "Transform | None" = None,
+    view_rotation_deg: float = 0.0,
 ) -> None:
     """Draw satellite/hybrid under data in EPSG:3857."""
     k = (basemap_source_key or "esri").strip().lower()
@@ -333,6 +373,7 @@ def add_satellite_basemap(
             display_transform=display_transform,
             clip_path=clip_path,
             clip_transform=clip_transform,
+            view_rotation_deg=view_rotation_deg,
         )
         return
 
@@ -347,6 +388,7 @@ def add_satellite_basemap(
             display_transform=display_transform,
             clip_path=clip_path,
             clip_transform=clip_transform,
+            view_rotation_deg=view_rotation_deg,
         )
         return
 
@@ -367,15 +409,19 @@ def add_satellite_basemap(
             display_transform=display_transform,
             clip_path=clip_path,
             clip_transform=clip_transform,
+            view_rotation_deg=view_rotation_deg,
         )
         return
 
     if source is None:
         source = resolve_basemap_source(basemap_source_key)
 
-    xlim, ylim = compute_mercator_square_extent(x, y, axis_margin=axis_margin)
-    ax.set_xlim(*xlim)
-    ax.set_ylim(*ylim)
+    inner_xlim, inner_ylim = compute_mercator_square_extent(x, y, axis_margin=axis_margin)
+    scale = view_rotation_basemap_extent_scale(view_rotation_deg)
+    fetch_xlim, fetch_ylim = expand_mercator_square_extent(inner_xlim, inner_ylim, scale)
+
+    ax.set_xlim(*fetch_xlim)
+    ax.set_ylim(*fetch_ylim)
     ax.set_aspect("auto")
 
     headers = _tile_request_headers(basemap_source_key)
@@ -414,4 +460,6 @@ def add_satellite_basemap(
             if clip_path is not None:
                 im.set_clip_path(clip_path, transform=ct)
 
+    ax.set_xlim(*inner_xlim)
+    ax.set_ylim(*inner_ylim)
     ax.set_aspect("auto")

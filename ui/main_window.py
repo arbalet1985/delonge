@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -70,6 +70,10 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
         self._apply_styles()
+        self._redraw_debounce_timer = QTimer(self)
+        self._redraw_debounce_timer.setSingleShot(True)
+        self._redraw_debounce_timer.setInterval(320)
+        self._redraw_debounce_timer.timeout.connect(self._flush_debounced_redraw)
         self._connect_live_redraw_signals()
         self._using_web_mercator = False
         self._label_lon_lat_deg: tuple[np.ndarray, np.ndarray] | None = None
@@ -124,6 +128,15 @@ class MainWindow(QMainWindow):
         self.annotation_font_spin.setRange(5, 24)
         self.annotation_font_spin.setValue(7)
 
+        self.axis_tick_font_x_spin = QSpinBox()
+        self.axis_tick_font_x_spin.setRange(5, 18)
+        self.axis_tick_font_x_spin.setValue(9)
+        self.axis_tick_font_x_spin.setToolTip("Размер шрифта подписей делений по оси X (градусы/метры).")
+        self.axis_tick_font_y_spin = QSpinBox()
+        self.axis_tick_font_y_spin.setRange(5, 18)
+        self.axis_tick_font_y_spin.setValue(9)
+        self.axis_tick_font_y_spin.setToolTip("Размер шрифта подписей делений по оси Y.")
+
         self.rotation_deg_spin = QDoubleSpinBox()
         self.rotation_deg_spin.setRange(-180.0, 180.0)
         self.rotation_deg_spin.setDecimals(1)
@@ -148,16 +161,16 @@ class MainWindow(QMainWindow):
         self.map_view_rotation_spin.setSuffix("°")
         self.map_view_rotation_spin.setValue(0.0)
         self.map_view_rotation_spin.setToolTip(
-            "Поворот подложки и данных в плоскости карты (Web Mercator), вокруг центра точек. "
-            "При ненулевом угле подложка обрезается по контуру области данных (выпуклая оболочка)."
+            "Поворот подложки и данных в плоскости карты (Web Mercator), вокруг центра области. "
+            "Оси остаются в исходном квадратном масштабе; подложка подгружается с запасом по углу поворота, "
+            "чтобы не было белых углов у рамки графика."
         )
 
         self.basemap_checkbox = QCheckBox("Спутниковая подложка")
         self.basemap_checkbox.setChecked(False)
         self.basemap_checkbox.setToolTip(
-            "WGS84 в градусах; без поворота и без «горизонтального выравнивания». "
-            "Тайлы привязаны к северу вверх в Web Mercator — поворот точек ломает совпадение снимка с данными. "
-            "Нужен интернет."
+            "WGS84 в градусах; поворот данных (поле «Поворот карты») должен быть 0°. "
+            "Раскладка карт сверху вниз на подложку не влияет. Нужен интернет."
         )
 
         self.basemap_source_combo = QComboBox()
@@ -235,46 +248,56 @@ class MainWindow(QMainWindow):
         settings_layout.addWidget(self.point_size_spin, 1, 1)
         settings_layout.addWidget(QLabel("Шрифт подписей (rn/коорд.):"), 2, 0)
         settings_layout.addWidget(self.annotation_font_spin, 2, 1)
-        settings_layout.addWidget(QLabel("Поворот карты:"), 3, 0)
-        settings_layout.addWidget(self.rotation_deg_spin, 3, 1)
-        settings_layout.addWidget(QLabel("Отступ от рамки карты:"), 4, 0)
-        settings_layout.addWidget(self.axis_margin_spin, 4, 1)
-        settings_layout.addWidget(QLabel("Сглаживание:"), 5, 0)
-        settings_layout.addWidget(self.smoothing_spin, 5, 1)
-        settings_layout.addWidget(QLabel("Поворот вида (карта+подложка):"), 6, 0)
-        settings_layout.addWidget(self.map_view_rotation_spin, 6, 1)
-        settings_layout.addWidget(self.basemap_checkbox, 7, 0, 1, 3)
-        settings_layout.addWidget(QLabel("Источник подложки:"), 8, 0)
-        settings_layout.addWidget(self.basemap_source_combo, 8, 1, 1, 2)
-        settings_layout.addWidget(QLabel("Прозрачность слоя над подложкой:"), 9, 0)
-        settings_layout.addWidget(self.map_opacity_slider, 9, 1)
-        settings_layout.addWidget(self.map_opacity_label, 9, 2)
-        settings_layout.addWidget(QLabel("Прозрачность overlay:"), 10, 0)
-        settings_layout.addWidget(self.alpha_slider, 10, 1)
-        settings_layout.addWidget(self.alpha_label, 10, 2)
-        settings_layout.addWidget(QLabel("Градиент:"), 11, 0)
+        settings_layout.addWidget(QLabel("Деления осей X / Y (пт):"), 3, 0)
+        axis_tick_row = QWidget()
+        axis_tick_row_layout = QHBoxLayout(axis_tick_row)
+        axis_tick_row_layout.setContentsMargins(0, 0, 0, 0)
+        axis_tick_row_layout.setSpacing(8)
+        axis_tick_row_layout.addWidget(QLabel("X"))
+        axis_tick_row_layout.addWidget(self.axis_tick_font_x_spin)
+        axis_tick_row_layout.addWidget(QLabel("Y"))
+        axis_tick_row_layout.addWidget(self.axis_tick_font_y_spin)
+        settings_layout.addWidget(axis_tick_row, 3, 1, 1, 2)
+        settings_layout.addWidget(QLabel("Поворот карты:"), 4, 0)
+        settings_layout.addWidget(self.rotation_deg_spin, 4, 1)
+        settings_layout.addWidget(QLabel("Отступ от рамки карты:"), 5, 0)
+        settings_layout.addWidget(self.axis_margin_spin, 5, 1)
+        settings_layout.addWidget(QLabel("Сглаживание:"), 6, 0)
+        settings_layout.addWidget(self.smoothing_spin, 6, 1)
+        settings_layout.addWidget(QLabel("Поворот вида (карта+подложка):"), 7, 0)
+        settings_layout.addWidget(self.map_view_rotation_spin, 7, 1)
+        settings_layout.addWidget(self.basemap_checkbox, 8, 0, 1, 3)
+        settings_layout.addWidget(QLabel("Источник подложки:"), 9, 0)
+        settings_layout.addWidget(self.basemap_source_combo, 9, 1, 1, 2)
+        settings_layout.addWidget(QLabel("Прозрачность слоя над подложкой:"), 10, 0)
+        settings_layout.addWidget(self.map_opacity_slider, 10, 1)
+        settings_layout.addWidget(self.map_opacity_label, 10, 2)
+        settings_layout.addWidget(QLabel("Прозрачность overlay:"), 11, 0)
+        settings_layout.addWidget(self.alpha_slider, 11, 1)
+        settings_layout.addWidget(self.alpha_label, 11, 2)
+        settings_layout.addWidget(QLabel("Градиент:"), 12, 0)
         cmap_row = QWidget()
         cmap_row_layout = QHBoxLayout(cmap_row)
         cmap_row_layout.setContentsMargins(0, 0, 0, 0)
         cmap_row_layout.setSpacing(8)
         cmap_row_layout.addWidget(self.cmap_start_btn)
         cmap_row_layout.addWidget(self.cmap_end_btn)
-        settings_layout.addWidget(cmap_row, 11, 1, 1, 2)
-        settings_layout.addWidget(self.smooth_contours_checkbox, 12, 0, 1, 3)
-        settings_layout.addWidget(self.show_points_checkbox, 13, 0, 1, 3)
-        settings_layout.addWidget(self.show_coordinates_checkbox, 14, 0, 1, 3)
-        settings_layout.addWidget(self.show_rn_checkbox, 15, 0, 1, 3)
-        settings_layout.addWidget(self.show_scale_bar_checkbox, 16, 0, 1, 3)
-        settings_layout.addWidget(self.show_contour_lines_checkbox, 17, 0, 1, 3)
-        settings_layout.addWidget(self.show_contour_labels_checkbox, 18, 0, 1, 3)
-        settings_layout.addWidget(QLabel("Шрифт подписей изолиний:"), 19, 0)
-        settings_layout.addWidget(self.contour_label_font_spin, 19, 1)
-        settings_layout.addWidget(QLabel("Толщина изолиний:"), 20, 0)
-        settings_layout.addWidget(self.contour_line_width_spin, 20, 1)
-        settings_layout.addWidget(self.invert_x_checkbox, 21, 0, 1, 3)
-        settings_layout.addWidget(self.invert_y_checkbox, 22, 0, 1, 3)
-        settings_layout.addWidget(self.swap_xy_checkbox, 23, 0, 1, 3)
-        settings_layout.addWidget(self.enforce_mirror_checkbox, 24, 0, 1, 3)
+        settings_layout.addWidget(cmap_row, 12, 1, 1, 2)
+        settings_layout.addWidget(self.smooth_contours_checkbox, 13, 0, 1, 3)
+        settings_layout.addWidget(self.show_points_checkbox, 14, 0, 1, 3)
+        settings_layout.addWidget(self.show_coordinates_checkbox, 15, 0, 1, 3)
+        settings_layout.addWidget(self.show_rn_checkbox, 16, 0, 1, 3)
+        settings_layout.addWidget(self.show_scale_bar_checkbox, 17, 0, 1, 3)
+        settings_layout.addWidget(self.show_contour_lines_checkbox, 18, 0, 1, 3)
+        settings_layout.addWidget(self.show_contour_labels_checkbox, 19, 0, 1, 3)
+        settings_layout.addWidget(QLabel("Шрифт подписей изолиний:"), 20, 0)
+        settings_layout.addWidget(self.contour_label_font_spin, 20, 1)
+        settings_layout.addWidget(QLabel("Толщина изолиний:"), 21, 0)
+        settings_layout.addWidget(self.contour_line_width_spin, 21, 1)
+        settings_layout.addWidget(self.invert_x_checkbox, 22, 0, 1, 3)
+        settings_layout.addWidget(self.invert_y_checkbox, 23, 0, 1, 3)
+        settings_layout.addWidget(self.swap_xy_checkbox, 24, 0, 1, 3)
+        settings_layout.addWidget(self.enforce_mirror_checkbox, 25, 0, 1, 3)
 
         self.toggle_settings_btn = QToolButton()
         self.toggle_settings_btn.setText("Свернуть параметры")
@@ -287,9 +310,13 @@ class MainWindow(QMainWindow):
 
         actions = QGroupBox("Действия")
         actions_layout = QVBoxLayout(actions)
-        self.horizontal_align_btn = QPushButton("Горизонтальное выравнивание: выкл")
+        self.horizontal_align_btn = QPushButton("Карты: слева направо")
         self.horizontal_align_btn.setCheckable(True)
         self.horizontal_align_btn.setChecked(False)
+        self.horizontal_align_btn.setToolTip(
+            "Выкл: Ap и Ac рядом (слева направо). Вкл: Ap сверху, Ac снизу. "
+            "На данные и подложку не влияет (только расположение панелей)."
+        )
         self.horizontal_align_btn.toggled.connect(self._sync_horizontal_align_btn_text)
         build_btn = QPushButton("Построить карты Ap / Ac")
         overlay_btn = QPushButton("Проверить наложение (overlay)")
@@ -360,7 +387,7 @@ class MainWindow(QMainWindow):
         else:
             self.cmap_end = color.name()
         self._sync_cmap_button_styles()
-        self._redraw_current_view_if_ready()
+        self._schedule_debounced_redraw()
 
     def _sync_alpha_text(self) -> None:
         self.alpha_label.setText(f"{self.alpha_slider.value() / 100:.2f}")
@@ -370,8 +397,6 @@ class MainWindow(QMainWindow):
 
     def _basemap_allowed(self) -> bool:
         if abs(self.rotation_deg_spin.value()) > 1e-6:
-            return False
-        if self.horizontal_align_btn.isChecked():
             return False
         if not self.file_path:
             return False
@@ -416,7 +441,7 @@ class MainWindow(QMainWindow):
         self.basemap_checkbox.setToolTip(
             "Спутник по координатам WGS84 (нужен интернет)."
             if allowed
-            else "Недоступно: WGS84 в градусах, поворот 0°, без горизонтального выравнивания."
+            else "Недоступно: WGS84 в градусах и поворот данных 0°."
         )
 
     def _connect_live_redraw_signals(self) -> None:
@@ -436,24 +461,26 @@ class MainWindow(QMainWindow):
             self.basemap_checkbox,
         ]
         for checkbox in live_checkboxes:
-            checkbox.toggled.connect(self._redraw_current_view_if_ready)
+            checkbox.toggled.connect(self._schedule_debounced_redraw)
 
         self.basemap_checkbox.toggled.connect(self._update_basemap_opacity_enabled)
 
-        self.horizontal_align_btn.toggled.connect(self._redraw_current_view_if_ready)
-        self.alpha_slider.sliderReleased.connect(self._redraw_current_view_if_ready)
-        self.map_opacity_slider.sliderReleased.connect(self._redraw_current_view_if_ready)
-        self.basemap_source_combo.currentIndexChanged.connect(self._redraw_current_view_if_ready)
-        self.levels_spin.valueChanged.connect(self._redraw_current_view_if_ready)
-        self.levels_step_spin.valueChanged.connect(self._redraw_current_view_if_ready)
-        self.point_size_spin.valueChanged.connect(self._redraw_current_view_if_ready)
-        self.annotation_font_spin.valueChanged.connect(self._redraw_current_view_if_ready)
-        self.contour_label_font_spin.valueChanged.connect(self._redraw_current_view_if_ready)
-        self.contour_line_width_spin.valueChanged.connect(self._redraw_current_view_if_ready)
-        self.rotation_deg_spin.valueChanged.connect(self._redraw_current_view_if_ready)
-        self.map_view_rotation_spin.valueChanged.connect(self._redraw_current_view_if_ready)
-        self.axis_margin_spin.valueChanged.connect(self._redraw_current_view_if_ready)
-        self.smoothing_spin.valueChanged.connect(self._redraw_current_view_if_ready)
+        self.horizontal_align_btn.toggled.connect(self._schedule_debounced_redraw)
+        self.alpha_slider.valueChanged.connect(self._schedule_debounced_redraw)
+        self.map_opacity_slider.valueChanged.connect(self._schedule_debounced_redraw)
+        self.basemap_source_combo.currentIndexChanged.connect(self._schedule_debounced_redraw)
+        self.levels_spin.valueChanged.connect(self._schedule_debounced_redraw)
+        self.levels_step_spin.valueChanged.connect(self._schedule_debounced_redraw)
+        self.point_size_spin.valueChanged.connect(self._schedule_debounced_redraw)
+        self.annotation_font_spin.valueChanged.connect(self._schedule_debounced_redraw)
+        self.axis_tick_font_x_spin.valueChanged.connect(self._schedule_debounced_redraw)
+        self.axis_tick_font_y_spin.valueChanged.connect(self._schedule_debounced_redraw)
+        self.contour_label_font_spin.valueChanged.connect(self._schedule_debounced_redraw)
+        self.contour_line_width_spin.valueChanged.connect(self._schedule_debounced_redraw)
+        self.rotation_deg_spin.valueChanged.connect(self._schedule_debounced_redraw)
+        self.map_view_rotation_spin.valueChanged.connect(self._schedule_debounced_redraw)
+        self.axis_margin_spin.valueChanged.connect(self._schedule_debounced_redraw)
+        self.smoothing_spin.valueChanged.connect(self._schedule_debounced_redraw)
 
     def _can_prepare_data_silently(self) -> bool:
         if not self.file_path:
@@ -476,8 +503,6 @@ class MainWindow(QMainWindow):
             else:
                 x = self.data["x"].to_numpy(dtype=float)
                 y = self.data["y"].to_numpy(dtype=float)
-            if self.horizontal_align_btn.isChecked():
-                x, y = self._rotate_points_to_horizontal(x, y)
             x, y = self._rotate_points_by_degrees(x, y, self.rotation_deg_spin.value())
             use_basemap = self.basemap_checkbox.isChecked() and self._basemap_allowed()
             if use_basemap:
@@ -493,7 +518,12 @@ class MainWindow(QMainWindow):
         except Exception:
             return False
 
-    def _redraw_current_view_if_ready(self) -> None:
+    def _schedule_debounced_redraw(self) -> None:
+        """Перерисовка с задержкой, чтобы бегунки и спины не вызывали тяжёлый рендер на каждый шаг."""
+        self._redraw_debounce_timer.stop()
+        self._redraw_debounce_timer.start()
+
+    def _flush_debounced_redraw(self) -> None:
         self._update_basemap_availability()
         if not self._prepare_data_silently():
             return
@@ -507,35 +537,7 @@ class MainWindow(QMainWindow):
         self.toggle_settings_btn.setText("Свернуть параметры" if checked else "Развернуть параметры")
 
     def _sync_horizontal_align_btn_text(self, checked: bool) -> None:
-        self.horizontal_align_btn.setText(
-            "Горизонтальное выравнивание: вкл" if checked else "Горизонтальное выравнивание: выкл"
-        )
-
-    def _rotate_points_to_horizontal(self, x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        points = np.column_stack((x, y))
-        center = points.mean(axis=0)
-        centered = points - center
-
-        cov = np.cov(centered, rowvar=False)
-        eigen_values, eigen_vectors = np.linalg.eigh(cov)
-        major_axis = eigen_vectors[:, int(np.argmax(eigen_values))]
-        angle = float(np.arctan2(major_axis[1], major_axis[0]))
-        theta = -angle
-
-        cos_t = float(np.cos(theta))
-        sin_t = float(np.sin(theta))
-        rotation_matrix = np.array([[cos_t, -sin_t], [sin_t, cos_t]])
-        rotated = centered @ rotation_matrix.T
-
-        # Ensure the longer extent is along X after rotation.
-        x_span = float(np.max(rotated[:, 0]) - np.min(rotated[:, 0]))
-        y_span = float(np.max(rotated[:, 1]) - np.min(rotated[:, 1]))
-        if y_span > x_span:
-            rotate_90 = np.array([[0.0, -1.0], [1.0, 0.0]])
-            rotated = rotated @ rotate_90.T
-
-        rotated = rotated + center
-        return rotated[:, 0], rotated[:, 1]
+        self.horizontal_align_btn.setText("Карты: сверху вниз" if checked else "Карты: слева направо")
 
     def _rotate_points_by_degrees(self, x: np.ndarray, y: np.ndarray, degrees: float) -> tuple[np.ndarray, np.ndarray]:
         if abs(degrees) < 1e-9:
@@ -633,8 +635,6 @@ class MainWindow(QMainWindow):
                 x = self.data["x"].to_numpy(dtype=float)
                 y = self.data["y"].to_numpy(dtype=float)
 
-            if self.horizontal_align_btn.isChecked():
-                x, y = self._rotate_points_to_horizontal(x, y)
             x, y = self._rotate_points_by_degrees(x, y, self.rotation_deg_spin.value())
             use_basemap = self.basemap_checkbox.isChecked() and self._basemap_allowed()
             if use_basemap:
@@ -705,6 +705,8 @@ class MainWindow(QMainWindow):
                 coordinate_degrees_lon_lat=self._label_lon_lat_deg,
                 google_maps_api_key=self._app_config.google_maps_api_key,
                 view_rotation_deg=self.map_view_rotation_spin.value(),
+                axis_tick_fontsize_x=float(self.axis_tick_font_x_spin.value()),
+                axis_tick_fontsize_y=float(self.axis_tick_font_y_spin.value()),
             )
         except BasemapError as exc:
             self._show_error(str(exc))
@@ -765,6 +767,8 @@ class MainWindow(QMainWindow):
                 coordinate_degrees_lon_lat=self._label_lon_lat_deg,
                 google_maps_api_key=self._app_config.google_maps_api_key,
                 view_rotation_deg=self.map_view_rotation_spin.value(),
+                axis_tick_fontsize_x=float(self.axis_tick_font_x_spin.value()),
+                axis_tick_fontsize_y=float(self.axis_tick_font_y_spin.value()),
             )
         except BasemapError as exc:
             self._show_error(str(exc))
