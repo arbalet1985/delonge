@@ -9,7 +9,7 @@ from matplotlib.ticker import FuncFormatter, MaxNLocator, ScalarFormatter
 from matplotlib.tri import LinearTriInterpolator, Triangulation
 from scipy.ndimage import gaussian_filter
 
-from core.basemap import add_satellite_basemap, compute_mercator_square_extent, web_mercator_to_lon_lat
+from core.basemap import add_satellite_basemap, compute_mercator_axis_extent, web_mercator_to_lon_lat
 from core.interpolation import build_levels, mirror_fields
 
 
@@ -20,9 +20,20 @@ def _tfm_kw(tfm: mtransforms.Transform | None) -> dict:
 def _mercator_rotation_center(
     triangulation: Triangulation,
     axis_margin: float,
+    *,
+    mercator_force_square: bool = True,
+    mercator_span_scale_x: float = 1.0,
+    mercator_span_scale_y: float = 1.0,
 ) -> tuple[float, float]:
-    """Центр квадратного extent подложки (как в compute_mercator_square_extent), не среднее точек."""
-    xlim, ylim = compute_mercator_square_extent(triangulation.x, triangulation.y, axis_margin=axis_margin)
+    """Центр охвата подложки (как в compute_mercator_axis_extent), не среднее точек."""
+    xlim, ylim = compute_mercator_axis_extent(
+        triangulation.x,
+        triangulation.y,
+        axis_margin,
+        scale_x=mercator_span_scale_x,
+        scale_y=mercator_span_scale_y,
+        force_square=mercator_force_square,
+    )
     cx = 0.5 * (xlim[0] + xlim[1])
     cy = 0.5 * (ylim[0] + ylim[1])
     return cx, cy
@@ -363,6 +374,11 @@ def render_dual_maps(
     view_rotation_deg: float = 0.0,
     axis_tick_fontsize_x: float = 9.0,
     axis_tick_fontsize_y: float = 9.0,
+    mercator_force_square: bool = True,
+    mercator_span_scale_x: float = 1.0,
+    mercator_span_scale_y: float = 1.0,
+    basemap_offset_east_m: float = 0.0,
+    basemap_offset_north_m: float = 0.0,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
     levels, vmin, vmax = _compute_levels(ap_plot, ac_plot, levels_count=levels_count, levels_step=levels_step)
@@ -376,7 +392,13 @@ def render_dual_maps(
 
     fill_alpha = float(np.clip(map_layer_alpha, 0.05, 1.0)) if basemap_enabled else 1.0
 
-    cx, cy = _mercator_rotation_center(triangulation, axis_margin)
+    cx, cy = _mercator_rotation_center(
+        triangulation,
+        axis_margin,
+        mercator_force_square=mercator_force_square,
+        mercator_span_scale_x=mercator_span_scale_x,
+        mercator_span_scale_y=mercator_span_scale_y,
+    )
 
     tfm0 = _view_data_transform(axes[0], cx, cy, view_rotation_deg)
     tfm1 = _view_data_transform(axes[1], cx, cy, view_rotation_deg)
@@ -394,6 +416,11 @@ def render_dual_maps(
             google_maps_api_key=google_maps_api_key,
             display_transform=tfm0,
             view_rotation_deg=view_rotation_deg,
+            mercator_force_square=mercator_force_square,
+            mercator_span_scale_x=mercator_span_scale_x,
+            mercator_span_scale_y=mercator_span_scale_y,
+            basemap_offset_east_m=basemap_offset_east_m,
+            basemap_offset_north_m=basemap_offset_north_m,
         )
         add_satellite_basemap(
             axes[1],
@@ -405,6 +432,11 @@ def render_dual_maps(
             google_maps_api_key=google_maps_api_key,
             display_transform=tfm1,
             view_rotation_deg=view_rotation_deg,
+            mercator_force_square=mercator_force_square,
+            mercator_span_scale_x=mercator_span_scale_x,
+            mercator_span_scale_y=mercator_span_scale_y,
+            basemap_offset_east_m=basemap_offset_east_m,
+            basemap_offset_north_m=basemap_offset_north_m,
         )
 
     if smooth_contours:
@@ -602,6 +634,12 @@ def render_dual_maps(
     else:
         fig.subplots_adjust(left=0.06, right=0.98, top=0.92, bottom=0.11, wspace=0.32)
 
+    # Одинаковый м/пиксель по X и Y в EPSG:3857; иначе «auto» даёт разное растяжение на разных фигурах
+    # и подложка на overlay визуально не совпадает с отдельными картами при том же охвате.
+    if web_mercator:
+        for ax in axes:
+            ax.set_aspect("equal")
+
     return fig
 
 
@@ -642,16 +680,28 @@ def render_overlay_map(
     view_rotation_deg: float = 0.0,
     axis_tick_fontsize_x: float = 9.0,
     axis_tick_fontsize_y: float = 9.0,
+    mercator_force_square: bool = True,
+    mercator_span_scale_x: float = 1.0,
+    mercator_span_scale_y: float = 1.0,
+    basemap_offset_east_m: float = 0.0,
+    basemap_offset_north_m: float = 0.0,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
     levels, vmin, vmax = _compute_levels(ap_plot, ac_plot, levels_count=levels_count, levels_step=levels_step)
 
-    fig, ax = plt.subplots(1, 1, figsize=(7, 5), constrained_layout=False)
+    # Высота и пропорции ближе к одной панели «Отдельные карты» (12×5.5, 1×2), чтобы охват совпадал глазом.
+    fig, ax = plt.subplots(1, 1, figsize=(6, 5.5), constrained_layout=False)
     cmap = _build_cmap(cmap_start, cmap_end)
 
     map_alpha_factor = float(np.clip(map_layer_alpha, 0.05, 1.0)) if basemap_enabled else 1.0
 
-    cx, cy = _mercator_rotation_center(triangulation, axis_margin)
+    cx, cy = _mercator_rotation_center(
+        triangulation,
+        axis_margin,
+        mercator_force_square=mercator_force_square,
+        mercator_span_scale_x=mercator_span_scale_x,
+        mercator_span_scale_y=mercator_span_scale_y,
+    )
     tfm = _view_data_transform(ax, cx, cy, view_rotation_deg)
     kw = _tfm_kw(tfm)
 
@@ -666,6 +716,11 @@ def render_overlay_map(
             google_maps_api_key=google_maps_api_key,
             display_transform=tfm,
             view_rotation_deg=view_rotation_deg,
+            mercator_force_square=mercator_force_square,
+            mercator_span_scale_x=mercator_span_scale_x,
+            mercator_span_scale_y=mercator_span_scale_y,
+            basemap_offset_east_m=basemap_offset_east_m,
+            basemap_offset_north_m=basemap_offset_north_m,
         )
 
     if smooth_contours:
@@ -810,4 +865,6 @@ def render_overlay_map(
     mappable.set_clim(vmin, vmax)
     fig.colorbar(mappable, ax=ax, location="right", shrink=0.95)
     fig.subplots_adjust(left=0.08, right=0.94, top=0.93, bottom=0.11)
+    if web_mercator:
+        ax.set_aspect("equal")
     return fig

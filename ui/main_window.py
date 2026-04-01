@@ -49,7 +49,7 @@ class MainWindow(QMainWindow):
         self.cmap_end = "#000000"
 
         self.main_canvas = FigureCanvas(Figure(figsize=(12, 5)))
-        self.overlay_canvas = FigureCanvas(Figure(figsize=(7, 5)))
+        self.overlay_canvas = FigureCanvas(Figure(figsize=(6, 5.5)))
 
         self.column_combos: dict[str, QComboBox] = {}
         self.file_label = QLabel("Файл: не выбран")
@@ -148,6 +148,48 @@ class MainWindow(QMainWindow):
         self.axis_margin_spin.setRange(0, 20)
         self.axis_margin_spin.setValue(5)
         self.axis_margin_spin.setSuffix(" %")
+
+        self.mercator_square_extent_checkbox = QCheckBox("Квадратный охват (max X/Y)")
+        self.mercator_square_extent_checkbox.setChecked(False)
+        self.mercator_square_extent_checkbox.setToolTip(
+            "Вкл: одинаковый масштаб по X и Y (квадратная область, как раньше). "
+            "Выкл: охват по каждой оси по размаху данных — меньше пустого места у вытянутых полос. "
+            "Только для Web Mercator и подложки."
+        )
+        self.mercator_span_x_spin = QSpinBox()
+        self.mercator_span_x_spin.setRange(25, 400)
+        self.mercator_span_x_spin.setValue(100)
+        self.mercator_span_x_spin.setSuffix(" %")
+        self.mercator_span_x_spin.setToolTip(
+            "Дополнительный множитель охвата по оси X относительно размаха данных (после отступа рамки)."
+        )
+        self.mercator_span_y_spin = QSpinBox()
+        self.mercator_span_y_spin.setRange(25, 400)
+        self.mercator_span_y_spin.setValue(100)
+        self.mercator_span_y_spin.setSuffix(" %")
+        self.mercator_span_y_spin.setToolTip(
+            "Дополнительный множитель охвата по оси Y (растянуть/сжать вертикально)."
+        )
+
+        self.basemap_offset_e_spin = QDoubleSpinBox()
+        self.basemap_offset_e_spin.setRange(-20000.0, 20000.0)
+        self.basemap_offset_e_spin.setDecimals(1)
+        self.basemap_offset_e_spin.setSingleStep(5.0)
+        self.basemap_offset_e_spin.setSuffix(" м")
+        self.basemap_offset_e_spin.setValue(0.0)
+        self.basemap_offset_e_spin.setToolTip(
+            "Сдвиг только слоя подложки по оси X в метрах Web Mercator (восток +). "
+            "Точки и изолинии не смещаются — подстройка к Яндекс/Google и т.д."
+        )
+        self.basemap_offset_n_spin = QDoubleSpinBox()
+        self.basemap_offset_n_spin.setRange(-20000.0, 20000.0)
+        self.basemap_offset_n_spin.setDecimals(1)
+        self.basemap_offset_n_spin.setSingleStep(5.0)
+        self.basemap_offset_n_spin.setSuffix(" м")
+        self.basemap_offset_n_spin.setValue(0.0)
+        self.basemap_offset_n_spin.setToolTip(
+            "Сдвиг подложки по оси Y в метрах Mercator (север +). Данные остаются на месте."
+        )
 
         self.smoothing_spin = QSpinBox()
         self.smoothing_spin.setRange(0, 40)
@@ -262,42 +304,63 @@ class MainWindow(QMainWindow):
         settings_layout.addWidget(self.rotation_deg_spin, 4, 1)
         settings_layout.addWidget(QLabel("Отступ от рамки карты:"), 5, 0)
         settings_layout.addWidget(self.axis_margin_spin, 5, 1)
-        settings_layout.addWidget(QLabel("Сглаживание:"), 6, 0)
-        settings_layout.addWidget(self.smoothing_spin, 6, 1)
-        settings_layout.addWidget(QLabel("Поворот вида (карта+подложка):"), 7, 0)
-        settings_layout.addWidget(self.map_view_rotation_spin, 7, 1)
-        settings_layout.addWidget(self.basemap_checkbox, 8, 0, 1, 3)
-        settings_layout.addWidget(QLabel("Источник подложки:"), 9, 0)
-        settings_layout.addWidget(self.basemap_source_combo, 9, 1, 1, 2)
-        settings_layout.addWidget(QLabel("Прозрачность слоя над подложкой:"), 10, 0)
-        settings_layout.addWidget(self.map_opacity_slider, 10, 1)
-        settings_layout.addWidget(self.map_opacity_label, 10, 2)
-        settings_layout.addWidget(QLabel("Прозрачность overlay:"), 11, 0)
-        settings_layout.addWidget(self.alpha_slider, 11, 1)
-        settings_layout.addWidget(self.alpha_label, 11, 2)
-        settings_layout.addWidget(QLabel("Градиент:"), 12, 0)
+        settings_layout.addWidget(self.mercator_square_extent_checkbox, 6, 0, 1, 3)
+        settings_layout.addWidget(QLabel("Масштаб охвата X / Y (%):"), 7, 0)
+        mercator_span_row = QWidget()
+        mercator_span_row_layout = QHBoxLayout(mercator_span_row)
+        mercator_span_row_layout.setContentsMargins(0, 0, 0, 0)
+        mercator_span_row_layout.setSpacing(8)
+        mercator_span_row_layout.addWidget(QLabel("X"))
+        mercator_span_row_layout.addWidget(self.mercator_span_x_spin)
+        mercator_span_row_layout.addWidget(QLabel("Y"))
+        mercator_span_row_layout.addWidget(self.mercator_span_y_spin)
+        settings_layout.addWidget(mercator_span_row, 7, 1, 1, 2)
+        settings_layout.addWidget(QLabel("Сглаживание:"), 8, 0)
+        settings_layout.addWidget(self.smoothing_spin, 8, 1)
+        settings_layout.addWidget(QLabel("Поворот вида (карта+подложка):"), 9, 0)
+        settings_layout.addWidget(self.map_view_rotation_spin, 9, 1)
+        settings_layout.addWidget(self.basemap_checkbox, 10, 0, 1, 3)
+        settings_layout.addWidget(QLabel("Источник подложки:"), 11, 0)
+        settings_layout.addWidget(self.basemap_source_combo, 11, 1, 1, 2)
+        settings_layout.addWidget(QLabel("Сдвиг подложки E / N (м):"), 12, 0)
+        basemap_off_row = QWidget()
+        basemap_off_row_layout = QHBoxLayout(basemap_off_row)
+        basemap_off_row_layout.setContentsMargins(0, 0, 0, 0)
+        basemap_off_row_layout.setSpacing(8)
+        basemap_off_row_layout.addWidget(QLabel("E"))
+        basemap_off_row_layout.addWidget(self.basemap_offset_e_spin)
+        basemap_off_row_layout.addWidget(QLabel("N"))
+        basemap_off_row_layout.addWidget(self.basemap_offset_n_spin)
+        settings_layout.addWidget(basemap_off_row, 12, 1, 1, 2)
+        settings_layout.addWidget(QLabel("Прозрачность слоя над подложкой:"), 13, 0)
+        settings_layout.addWidget(self.map_opacity_slider, 13, 1)
+        settings_layout.addWidget(self.map_opacity_label, 13, 2)
+        settings_layout.addWidget(QLabel("Прозрачность overlay:"), 14, 0)
+        settings_layout.addWidget(self.alpha_slider, 14, 1)
+        settings_layout.addWidget(self.alpha_label, 14, 2)
+        settings_layout.addWidget(QLabel("Градиент:"), 15, 0)
         cmap_row = QWidget()
         cmap_row_layout = QHBoxLayout(cmap_row)
         cmap_row_layout.setContentsMargins(0, 0, 0, 0)
         cmap_row_layout.setSpacing(8)
         cmap_row_layout.addWidget(self.cmap_start_btn)
         cmap_row_layout.addWidget(self.cmap_end_btn)
-        settings_layout.addWidget(cmap_row, 12, 1, 1, 2)
-        settings_layout.addWidget(self.smooth_contours_checkbox, 13, 0, 1, 3)
-        settings_layout.addWidget(self.show_points_checkbox, 14, 0, 1, 3)
-        settings_layout.addWidget(self.show_coordinates_checkbox, 15, 0, 1, 3)
-        settings_layout.addWidget(self.show_rn_checkbox, 16, 0, 1, 3)
-        settings_layout.addWidget(self.show_scale_bar_checkbox, 17, 0, 1, 3)
-        settings_layout.addWidget(self.show_contour_lines_checkbox, 18, 0, 1, 3)
-        settings_layout.addWidget(self.show_contour_labels_checkbox, 19, 0, 1, 3)
-        settings_layout.addWidget(QLabel("Шрифт подписей изолиний:"), 20, 0)
-        settings_layout.addWidget(self.contour_label_font_spin, 20, 1)
-        settings_layout.addWidget(QLabel("Толщина изолиний:"), 21, 0)
-        settings_layout.addWidget(self.contour_line_width_spin, 21, 1)
-        settings_layout.addWidget(self.invert_x_checkbox, 22, 0, 1, 3)
-        settings_layout.addWidget(self.invert_y_checkbox, 23, 0, 1, 3)
-        settings_layout.addWidget(self.swap_xy_checkbox, 24, 0, 1, 3)
-        settings_layout.addWidget(self.enforce_mirror_checkbox, 25, 0, 1, 3)
+        settings_layout.addWidget(cmap_row, 15, 1, 1, 2)
+        settings_layout.addWidget(self.smooth_contours_checkbox, 16, 0, 1, 3)
+        settings_layout.addWidget(self.show_points_checkbox, 17, 0, 1, 3)
+        settings_layout.addWidget(self.show_coordinates_checkbox, 18, 0, 1, 3)
+        settings_layout.addWidget(self.show_rn_checkbox, 19, 0, 1, 3)
+        settings_layout.addWidget(self.show_scale_bar_checkbox, 20, 0, 1, 3)
+        settings_layout.addWidget(self.show_contour_lines_checkbox, 21, 0, 1, 3)
+        settings_layout.addWidget(self.show_contour_labels_checkbox, 22, 0, 1, 3)
+        settings_layout.addWidget(QLabel("Шрифт подписей изолиний:"), 23, 0)
+        settings_layout.addWidget(self.contour_label_font_spin, 23, 1)
+        settings_layout.addWidget(QLabel("Толщина изолиний:"), 24, 0)
+        settings_layout.addWidget(self.contour_line_width_spin, 24, 1)
+        settings_layout.addWidget(self.invert_x_checkbox, 25, 0, 1, 3)
+        settings_layout.addWidget(self.invert_y_checkbox, 26, 0, 1, 3)
+        settings_layout.addWidget(self.swap_xy_checkbox, 27, 0, 1, 3)
+        settings_layout.addWidget(self.enforce_mirror_checkbox, 28, 0, 1, 3)
 
         self.toggle_settings_btn = QToolButton()
         self.toggle_settings_btn.setText("Свернуть параметры")
@@ -459,6 +522,7 @@ class MainWindow(QMainWindow):
             self.swap_xy_checkbox,
             self.smooth_contours_checkbox,
             self.basemap_checkbox,
+            self.mercator_square_extent_checkbox,
         ]
         for checkbox in live_checkboxes:
             checkbox.toggled.connect(self._schedule_debounced_redraw)
@@ -480,6 +544,10 @@ class MainWindow(QMainWindow):
         self.rotation_deg_spin.valueChanged.connect(self._schedule_debounced_redraw)
         self.map_view_rotation_spin.valueChanged.connect(self._schedule_debounced_redraw)
         self.axis_margin_spin.valueChanged.connect(self._schedule_debounced_redraw)
+        self.mercator_span_x_spin.valueChanged.connect(self._schedule_debounced_redraw)
+        self.mercator_span_y_spin.valueChanged.connect(self._schedule_debounced_redraw)
+        self.basemap_offset_e_spin.valueChanged.connect(self._schedule_debounced_redraw)
+        self.basemap_offset_n_spin.valueChanged.connect(self._schedule_debounced_redraw)
         self.smoothing_spin.valueChanged.connect(self._schedule_debounced_redraw)
 
     def _can_prepare_data_silently(self) -> bool:
@@ -707,6 +775,11 @@ class MainWindow(QMainWindow):
                 view_rotation_deg=self.map_view_rotation_spin.value(),
                 axis_tick_fontsize_x=float(self.axis_tick_font_x_spin.value()),
                 axis_tick_fontsize_y=float(self.axis_tick_font_y_spin.value()),
+                mercator_force_square=self.mercator_square_extent_checkbox.isChecked(),
+                mercator_span_scale_x=self.mercator_span_x_spin.value() / 100.0,
+                mercator_span_scale_y=self.mercator_span_y_spin.value() / 100.0,
+                basemap_offset_east_m=self.basemap_offset_e_spin.value(),
+                basemap_offset_north_m=self.basemap_offset_n_spin.value(),
             )
         except BasemapError as exc:
             self._show_error(str(exc))
@@ -769,6 +842,11 @@ class MainWindow(QMainWindow):
                 view_rotation_deg=self.map_view_rotation_spin.value(),
                 axis_tick_fontsize_x=float(self.axis_tick_font_x_spin.value()),
                 axis_tick_fontsize_y=float(self.axis_tick_font_y_spin.value()),
+                mercator_force_square=self.mercator_square_extent_checkbox.isChecked(),
+                mercator_span_scale_x=self.mercator_span_x_spin.value() / 100.0,
+                mercator_span_scale_y=self.mercator_span_y_spin.value() / 100.0,
+                basemap_offset_east_m=self.basemap_offset_e_spin.value(),
+                basemap_offset_north_m=self.basemap_offset_n_spin.value(),
             )
         except BasemapError as exc:
             self._show_error(str(exc))
