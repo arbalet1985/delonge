@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib import transforms as mtransforms
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import LinearSegmentedColormap, Normalize
 from matplotlib.figure import Figure
 from matplotlib.ticker import FuncFormatter, MaxNLocator, ScalarFormatter
 from matplotlib.tri import LinearTriInterpolator, Triangulation
@@ -79,6 +79,7 @@ def _style_axis_mercator_degrees(
     skip_margins: bool = False,
     axis_tick_fontsize_x: float = 9.0,
     axis_tick_fontsize_y: float = 9.0,
+    show_coordinate_grid: bool = True,
 ) -> None:
     ax.set_title(title, fontsize=12, pad=8)
     ax.set_xlabel("Долгота (°)")
@@ -93,7 +94,10 @@ def _style_axis_mercator_degrees(
     if not skip_margins:
         margin = float(np.clip(axis_margin, 0.0, 0.3))
         ax.margins(x=margin, y=margin)
-    ax.grid(alpha=0.15, linewidth=0.6)
+    if show_coordinate_grid:
+        ax.grid(alpha=0.15, linewidth=0.6)
+    else:
+        ax.grid(False)
 
 
 def _style_axis(
@@ -105,6 +109,7 @@ def _style_axis(
     skip_margins: bool = False,
     axis_tick_fontsize_x: float = 9.0,
     axis_tick_fontsize_y: float = 9.0,
+    show_coordinate_grid: bool = True,
 ) -> None:
     ax.set_title(title, fontsize=12, pad=8)
     ax.set_xlabel(x_label)
@@ -124,7 +129,10 @@ def _style_axis(
     ax.use_sticky_edges = False
     if not skip_margins:
         ax.margins(x=margin, y=margin)
-    ax.grid(alpha=0.15, linewidth=0.6)
+    if show_coordinate_grid:
+        ax.grid(alpha=0.15, linewidth=0.6)
+    else:
+        ax.grid(False)
 
 
 def _apply_axis_inversion(ax, invert_x: bool, invert_y: bool) -> None:
@@ -157,6 +165,40 @@ def _compute_levels(
     if levels.size < 2:
         return build_levels(ap_plot, ac_plot, levels_count)
     return levels, vmin, vmax
+
+
+def _build_fill_cmap_and_norm(
+    ap_plot: np.ndarray,
+    ac_plot: np.ndarray,
+    levels_count: int,
+    levels_step: float | None,
+    cmap_start: str,
+    cmap_end: str,
+    custom_gradient_colors: list[str] | None,
+) -> tuple[np.ndarray, np.ndarray, float, float, LinearSegmentedColormap, Normalize | None]:
+    """Уровни заливки и colormap.
+
+    При ``custom_gradient_colors`` — непрерывная интерполяция между выбранными цветами (как в легенде),
+    плюс плотная сетка уровней заливки, чтобы на карте переходы были плавными, а не из N полос.
+    Второй массив — уровни для изолиний (тот же, что задаёт пользователь ``levels_count`` / шаг).
+    """
+    contour_levels, vmin, vmax = _compute_levels(
+        ap_plot, ac_plot, levels_count=levels_count, levels_step=levels_step
+    )
+    if custom_gradient_colors and len(custom_gradient_colors) >= 2:
+        n = len(custom_gradient_colors)
+        positions = np.linspace(0.0, 1.0, n)
+        cmap = LinearSegmentedColormap.from_list(
+            "custom_gradient",
+            list(zip(positions.tolist(), custom_gradient_colors)),
+            N=256,
+        )
+        n_fill = int(max(128, min(512, 32 * n)))
+        fill_levels = np.linspace(float(vmin), float(vmax), n_fill)
+        norm = Normalize(vmin=float(vmin), vmax=float(vmax), clip=True)
+        return fill_levels, contour_levels, vmin, vmax, cmap, norm
+    cmap = _build_cmap(cmap_start, cmap_end)
+    return contour_levels, contour_levels, vmin, vmax, cmap, None
 
 
 def _draw_points_and_labels(
@@ -221,15 +263,36 @@ def _draw_points_and_labels(
             )
 
 
-def _draw_scale_bar(
+def _meters_per_data_unit_xy(
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    web_mercator: bool,
+) -> tuple[float, float]:
+    """Метры на единицу данных по X (восток) и Y (север) для подписи масштаба."""
+    if web_mercator:
+        return 1.0, 1.0
+    x_is_geo = float(np.max(np.abs(x))) <= 180.0
+    y_is_geo = float(np.max(np.abs(y))) <= 90.0
+    if x_is_geo and y_is_geo:
+        lat_mid = float(np.mean(y))
+        mux = 111_320.0 * np.cos(np.deg2rad(lat_mid))
+        mux = float(np.clip(mux, 1_000.0, 111_320.0))
+        return mux, 111_320.0
+    return 1.0, 1.0
+
+
+def _draw_scale_bars(
     ax,
     x: np.ndarray,
     y: np.ndarray,
-    enabled: bool,
+    *,
+    show_scale_bar_x: bool,
+    show_scale_bar_y: bool,
     web_mercator: bool = False,
-    data_transform: mtransforms.Transform | None = None,
 ) -> None:
-    if not enabled:
+    """Шкалы в долях оси (``transAxes``): горизонтальная по X и вертикальная по Y на экране, без поворота с картой."""
+    if not show_scale_bar_x and not show_scale_bar_y:
         return
     x_min = float(np.min(x))
     x_max = float(np.max(x))
@@ -240,53 +303,98 @@ def _draw_scale_bar(
     if x_span <= 0 or y_span <= 0:
         return
 
-    bar_x0 = x_min + x_span * 0.06
-    bar_y0 = y_min + y_span * 0.08
+    mux, muy = _meters_per_data_unit_xy(x, y, web_mercator=web_mercator)
+    x_span_m = abs(x_span) * mux
+    y_span_m = abs(y_span) * muy
 
-    # Web Mercator (EPSG:3857): axis units are meters.
-    if web_mercator:
-        meters_per_unit = 1.0
-    else:
-        # Convert scale length to meters for geographic coordinates (degrees).
-        x_is_geo = float(np.max(np.abs(x))) <= 180.0
-        y_is_geo = float(np.max(np.abs(y))) <= 90.0
-        if x_is_geo and y_is_geo:
-            lat_mid = float(np.mean(y))
-            meters_per_unit = 111_320.0 * np.cos(np.deg2rad(lat_mid))
-            meters_per_unit = float(np.clip(meters_per_unit, 1_000.0, 111_320.0))
-        else:
-            # Assume incoming coordinates are already meters.
-            meters_per_unit = 1.0
-    x_span_m = x_span * meters_per_unit
-    target_len_m = max(x_span_m * 0.2, 1.0)
-    bar_len_m = _nice_scale_length_meters(target_len_m)
-    if bar_len_m >= x_span_m:
-        bar_len_m = _nice_scale_length_meters(max(x_span_m * 0.5, 1.0))
-    bar_len = bar_len_m / meters_per_unit
+    xmin, xmax = ax.get_xlim()
+    ymin, ymax = ax.get_ylim()
+    xw = abs(xmax - xmin)
+    yw = abs(ymax - ymin)
+    if xw <= 0 or yw <= 0:
+        return
 
-    kw = _tfm_kw(data_transform)
-    ax.plot([bar_x0, bar_x0 + bar_len], [bar_y0, bar_y0], color="black", linewidth=2.2, solid_capstyle="butt", zorder=8, **kw)
-    ax.plot([bar_x0, bar_x0], [bar_y0 - y_span * 0.01, bar_y0 + y_span * 0.01], color="black", linewidth=1.4, zorder=8, **kw)
-    ax.plot(
-        [bar_x0 + bar_len, bar_x0 + bar_len],
-        [bar_y0 - y_span * 0.01, bar_y0 + y_span * 0.01],
-        color="black",
-        linewidth=1.4,
-        zorder=8,
-        **kw,
-    )
-    ax.text(
-        bar_x0 + bar_len / 2.0,
-        bar_y0 + y_span * 0.02,
-        _format_meters_text(bar_len_m),
-        fontsize=8.2,
-        ha="center",
-        va="bottom",
-        color="black",
-        zorder=8,
-        bbox={"boxstyle": "round,pad=0.12", "facecolor": "white", "edgecolor": "none", "alpha": 0.65},
-        **kw,
-    )
+    trans = ax.transAxes
+    ax_px, ax_py = 0.08, 0.07
+    frac_x_drawn = 0.0
+
+    if show_scale_bar_x:
+        target_len_m = max(x_span_m * 0.2, 1.0)
+        bar_len_m = _nice_scale_length_meters(target_len_m)
+        if bar_len_m >= x_span_m:
+            bar_len_m = _nice_scale_length_meters(max(x_span_m * 0.5, 1.0))
+        bar_len_data = bar_len_m / mux
+        frac_x = bar_len_data / xw
+        frac_x_drawn = frac_x
+        y_line = ax_py
+        ax.plot(
+            [ax_px, ax_px + frac_x],
+            [y_line, y_line],
+            color="black",
+            linewidth=2.2,
+            solid_capstyle="butt",
+            zorder=8,
+            transform=trans,
+            clip_on=False,
+        )
+        ax.plot([ax_px, ax_px], [y_line - 0.012, y_line + 0.012], color="black", linewidth=1.4, zorder=8, transform=trans, clip_on=False)
+        ax.plot(
+            [ax_px + frac_x, ax_px + frac_x],
+            [y_line - 0.012, y_line + 0.012],
+            color="black",
+            linewidth=1.4,
+            zorder=8,
+            transform=trans,
+            clip_on=False,
+        )
+        ax.text(
+            ax_px + frac_x / 2.0,
+            y_line + 0.02,
+            _format_meters_text(bar_len_m),
+            fontsize=8.2,
+            ha="center",
+            va="bottom",
+            color="black",
+            zorder=8,
+            transform=trans,
+            clip_on=False,
+            bbox={"boxstyle": "round,pad=0.12", "facecolor": "white", "edgecolor": "none", "alpha": 0.65},
+        )
+
+    if show_scale_bar_y:
+        target_len_m = max(y_span_m * 0.2, 1.0)
+        bar_len_m_y = _nice_scale_length_meters(target_len_m)
+        if bar_len_m_y >= y_span_m:
+            bar_len_m_y = _nice_scale_length_meters(max(y_span_m * 0.5, 1.0))
+        bar_len_data_y = bar_len_m_y / muy
+        frac_y = bar_len_data_y / yw
+        vx0 = ax_px + (frac_x_drawn + 0.03) if show_scale_bar_x else ax_px
+        vy0 = ax_py
+        ax.plot([vx0, vx0], [vy0, vy0 + frac_y], color="black", linewidth=2.2, solid_capstyle="butt", zorder=8, transform=trans, clip_on=False)
+        ax.plot([vx0 - 0.012, vx0 + 0.012], [vy0, vy0], color="black", linewidth=1.4, zorder=8, transform=trans, clip_on=False)
+        ax.plot(
+            [vx0 - 0.012, vx0 + 0.012],
+            [vy0 + frac_y, vy0 + frac_y],
+            color="black",
+            linewidth=1.4,
+            zorder=8,
+            transform=trans,
+            clip_on=False,
+        )
+        ax.text(
+            vx0 + 0.024,
+            vy0 + frac_y / 2.0,
+            _format_meters_text(bar_len_m_y),
+            fontsize=8.2,
+            ha="left",
+            va="center",
+            color="black",
+            zorder=8,
+            rotation=90,
+            transform=trans,
+            clip_on=False,
+            bbox={"boxstyle": "round,pad=0.12", "facecolor": "white", "edgecolor": "none", "alpha": 0.65},
+        )
 
 
 def _format_meters_text(length_m: float) -> str:
@@ -351,7 +459,9 @@ def render_dual_maps(
     show_coordinates: bool = False,
     show_rn_labels: bool = False,
     rn_labels: list[str] | None = None,
-    show_scale_bar: bool = True,
+    show_coordinate_grid: bool = True,
+    show_scale_bar_x: bool = True,
+    show_scale_bar_y: bool = False,
     invert_x: bool = False,
     invert_y: bool = False,
     x_label: str = "X",
@@ -362,6 +472,7 @@ def render_dual_maps(
     contour_label_font_size: int = 8,
     cmap_start: str = "#ffffff",
     cmap_end: str = "#000000",
+    custom_gradient_colors: list[str] | None = None,
     vertical_layout: bool = False,
     annotation_font_size: int = 7,
     axis_margin: float = 0.05,
@@ -381,14 +492,22 @@ def render_dual_maps(
     basemap_offset_north_m: float = 0.0,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
-    levels, vmin, vmax = _compute_levels(ap_plot, ac_plot, levels_count=levels_count, levels_step=levels_step)
+    fill_levels, contour_levels, vmin, vmax, cmap, bnorm = _build_fill_cmap_and_norm(
+        ap_plot,
+        ac_plot,
+        levels_count=levels_count,
+        levels_step=levels_step,
+        cmap_start=cmap_start,
+        cmap_end=cmap_end,
+        custom_gradient_colors=custom_gradient_colors,
+    )
+    _cf_extras = {"norm": bnorm, "extend": "neither"} if bnorm is not None else {"vmin": vmin, "vmax": vmax}
 
     if vertical_layout:
         fig, axes = plt.subplots(2, 1, figsize=(8, 10), constrained_layout=False)
     else:
         # constrained_layout breaks with dual colorbars + basemap (axes collapse to zero width).
         fig, axes = plt.subplots(1, 2, figsize=(12, 5.5), constrained_layout=False)
-    cmap = _build_cmap(cmap_start, cmap_end)
 
     fill_alpha = float(np.clip(map_layer_alpha, 0.05, 1.0)) if basemap_enabled else 1.0
 
@@ -445,12 +564,11 @@ def render_dual_maps(
             xg_ap,
             yg_ap,
             zg_ap,
-            levels=levels,
+            levels=fill_levels,
             cmap=cmap,
-            vmin=vmin,
-            vmax=vmax,
             alpha=fill_alpha,
             zorder=1,
+            **_cf_extras,
             **kw0,
         )
         if show_contour_lines:
@@ -458,7 +576,7 @@ def render_dual_maps(
                 xg_ap,
                 yg_ap,
                 zg_ap,
-                levels=levels,
+                levels=contour_levels,
                 colors="#101010",
                 linewidths=float(contour_line_width),
                 alpha=1.0,
@@ -470,19 +588,18 @@ def render_dual_maps(
         cf_ap = axes[0].tricontourf(
             triangulation,
             ap_plot,
-            levels=levels,
+            levels=fill_levels,
             cmap=cmap,
-            vmin=vmin,
-            vmax=vmax,
             alpha=fill_alpha,
             zorder=1,
+            **_cf_extras,
             **kw0,
         )
         if show_contour_lines:
             cs = axes[0].tricontour(
                 triangulation,
                 ap_plot,
-                levels=levels,
+                levels=contour_levels,
                 colors="#101010",
                 linewidths=float(contour_line_width),
                 alpha=1.0,
@@ -503,14 +620,6 @@ def render_dual_maps(
         coordinate_degrees_lon_lat=coordinate_degrees_lon_lat if web_mercator else None,
         data_transform=tfm0,
     )
-    _draw_scale_bar(
-        axes[0],
-        triangulation.x,
-        triangulation.y,
-        enabled=show_scale_bar,
-        web_mercator=web_mercator,
-        data_transform=tfm0,
-    )
     if web_mercator:
         _style_axis_mercator_degrees(
             axes[0],
@@ -519,6 +628,7 @@ def render_dual_maps(
             skip_margins=basemap_enabled,
             axis_tick_fontsize_x=axis_tick_fontsize_x,
             axis_tick_fontsize_y=axis_tick_fontsize_y,
+            show_coordinate_grid=show_coordinate_grid,
         )
     else:
         _style_axis(
@@ -530,6 +640,7 @@ def render_dual_maps(
             skip_margins=basemap_enabled,
             axis_tick_fontsize_x=axis_tick_fontsize_x,
             axis_tick_fontsize_y=axis_tick_fontsize_y,
+            show_coordinate_grid=show_coordinate_grid,
         )
     _apply_axis_inversion(axes[0], invert_x=invert_x, invert_y=invert_y)
     fig.colorbar(cf_ap, ax=axes[0], location="right", shrink=0.95)
@@ -540,12 +651,11 @@ def render_dual_maps(
             xg_ac,
             yg_ac,
             zg_ac,
-            levels=levels,
+            levels=fill_levels,
             cmap=cmap,
-            vmin=vmin,
-            vmax=vmax,
             alpha=fill_alpha,
             zorder=1,
+            **_cf_extras,
             **kw1,
         )
         if show_contour_lines:
@@ -553,7 +663,7 @@ def render_dual_maps(
                 xg_ac,
                 yg_ac,
                 zg_ac,
-                levels=levels,
+                levels=contour_levels,
                 colors="#101010",
                 linewidths=float(contour_line_width),
                 alpha=1.0,
@@ -565,19 +675,18 @@ def render_dual_maps(
         cf_ac = axes[1].tricontourf(
             triangulation,
             ac_plot,
-            levels=levels,
+            levels=fill_levels,
             cmap=cmap,
-            vmin=vmin,
-            vmax=vmax,
             alpha=fill_alpha,
             zorder=1,
+            **_cf_extras,
             **kw1,
         )
         if show_contour_lines:
             cs = axes[1].tricontour(
                 triangulation,
                 ac_plot,
-                levels=levels,
+                levels=contour_levels,
                 colors="#101010",
                 linewidths=float(contour_line_width),
                 alpha=1.0,
@@ -598,14 +707,6 @@ def render_dual_maps(
         coordinate_degrees_lon_lat=coordinate_degrees_lon_lat if web_mercator else None,
         data_transform=tfm1,
     )
-    _draw_scale_bar(
-        axes[1],
-        triangulation.x,
-        triangulation.y,
-        enabled=show_scale_bar,
-        web_mercator=web_mercator,
-        data_transform=tfm1,
-    )
     if web_mercator:
         _style_axis_mercator_degrees(
             axes[1],
@@ -614,6 +715,7 @@ def render_dual_maps(
             skip_margins=basemap_enabled,
             axis_tick_fontsize_x=axis_tick_fontsize_x,
             axis_tick_fontsize_y=axis_tick_fontsize_y,
+            show_coordinate_grid=show_coordinate_grid,
         )
     else:
         _style_axis(
@@ -625,6 +727,7 @@ def render_dual_maps(
             skip_margins=basemap_enabled,
             axis_tick_fontsize_x=axis_tick_fontsize_x,
             axis_tick_fontsize_y=axis_tick_fontsize_y,
+            show_coordinate_grid=show_coordinate_grid,
         )
     _apply_axis_inversion(axes[1], invert_x=invert_x, invert_y=invert_y)
     fig.colorbar(cf_ac, ax=axes[1], location="right", shrink=0.95)
@@ -639,6 +742,16 @@ def render_dual_maps(
     if web_mercator:
         for ax in axes:
             ax.set_aspect("equal")
+
+    for ax in axes:
+        _draw_scale_bars(
+            ax,
+            triangulation.x,
+            triangulation.y,
+            show_scale_bar_x=show_scale_bar_x,
+            show_scale_bar_y=show_scale_bar_y,
+            web_mercator=web_mercator,
+        )
 
     return fig
 
@@ -658,7 +771,9 @@ def render_overlay_map(
     show_coordinates: bool = False,
     show_rn_labels: bool = False,
     rn_labels: list[str] | None = None,
-    show_scale_bar: bool = True,
+    show_coordinate_grid: bool = True,
+    show_scale_bar_x: bool = True,
+    show_scale_bar_y: bool = False,
     invert_x: bool = False,
     invert_y: bool = False,
     x_label: str = "X",
@@ -671,6 +786,7 @@ def render_overlay_map(
     axis_margin: float = 0.05,
     cmap_start: str = "#ffffff",
     cmap_end: str = "#000000",
+    custom_gradient_colors: list[str] | None = None,
     basemap_enabled: bool = False,
     map_layer_alpha: float = 0.85,
     web_mercator: bool = False,
@@ -687,11 +803,19 @@ def render_overlay_map(
     basemap_offset_north_m: float = 0.0,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
-    levels, vmin, vmax = _compute_levels(ap_plot, ac_plot, levels_count=levels_count, levels_step=levels_step)
+    fill_levels, contour_levels, vmin, vmax, cmap, bnorm = _build_fill_cmap_and_norm(
+        ap_plot,
+        ac_plot,
+        levels_count=levels_count,
+        levels_step=levels_step,
+        cmap_start=cmap_start,
+        cmap_end=cmap_end,
+        custom_gradient_colors=custom_gradient_colors,
+    )
+    _cf_extras = {"norm": bnorm, "extend": "neither"} if bnorm is not None else {"vmin": vmin, "vmax": vmax}
 
     # Высота и пропорции ближе к одной панели «Отдельные карты» (12×5.5, 1×2), чтобы охват совпадал глазом.
     fig, ax = plt.subplots(1, 1, figsize=(6, 5.5), constrained_layout=False)
-    cmap = _build_cmap(cmap_start, cmap_end)
 
     map_alpha_factor = float(np.clip(map_layer_alpha, 0.05, 1.0)) if basemap_enabled else 1.0
 
@@ -732,38 +856,36 @@ def render_overlay_map(
             xg_ap,
             yg_ap,
             zg_ap,
-            levels=levels,
+            levels=fill_levels,
             cmap=cmap,
-            vmin=vmin,
-            vmax=vmax,
             alpha=ap_fill_alpha,
             antialiased=False,
             zorder=1,
+            **_cf_extras,
             **kw,
         )
         ax.contourf(
             xg_ac,
             yg_ac,
             zg_ac,
-            levels=levels,
+            levels=fill_levels,
             cmap=cmap,
-            vmin=vmin,
-            vmax=vmax,
             alpha=ac_fill_alpha,
             antialiased=False,
             zorder=1,
+            **_cf_extras,
             **kw,
         )
         if show_contour_lines:
             lw_main = float(contour_line_width)
             cs1 = ax.contour(
-                xg_ap, yg_ap, zg_ap, levels=levels, colors="#000000", linewidths=lw_main, alpha=1.0, **kw
+                xg_ap, yg_ap, zg_ap, levels=contour_levels, colors="#000000", linewidths=lw_main, alpha=1.0, **kw
             )
             cs2 = ax.contour(
                 xg_ac,
                 yg_ac,
                 zg_ac,
-                levels=levels,
+                levels=contour_levels,
                 colors="#222222",
                 linewidths=max(0.3, lw_main * 0.9),
                 alpha=1.0,
@@ -779,36 +901,34 @@ def render_overlay_map(
         ax.tricontourf(
             triangulation,
             ap_plot,
-            levels=levels,
+            levels=fill_levels,
             cmap=cmap,
-            vmin=vmin,
-            vmax=vmax,
             alpha=ap_fill_alpha,
             antialiased=False,
             zorder=1,
+            **_cf_extras,
             **kw,
         )
         ax.tricontourf(
             triangulation,
             ac_plot,
-            levels=levels,
+            levels=fill_levels,
             cmap=cmap,
-            vmin=vmin,
-            vmax=vmax,
             alpha=ac_fill_alpha,
             antialiased=False,
             zorder=1,
+            **_cf_extras,
             **kw,
         )
         if show_contour_lines:
             lw_main = float(contour_line_width)
             cs1 = ax.tricontour(
-                triangulation, ap_plot, levels=levels, colors="#000000", linewidths=lw_main, alpha=1.0, **kw
+                triangulation, ap_plot, levels=contour_levels, colors="#000000", linewidths=lw_main, alpha=1.0, **kw
             )
             cs2 = ax.tricontour(
                 triangulation,
                 ac_plot,
-                levels=levels,
+                levels=contour_levels,
                 colors="#222222",
                 linewidths=max(0.3, lw_main * 0.9),
                 alpha=1.0,
@@ -831,14 +951,6 @@ def render_overlay_map(
         coordinate_degrees_lon_lat=coordinate_degrees_lon_lat if web_mercator else None,
         data_transform=tfm,
     )
-    _draw_scale_bar(
-        ax,
-        triangulation.x,
-        triangulation.y,
-        enabled=show_scale_bar,
-        web_mercator=web_mercator,
-        data_transform=tfm,
-    )
     if web_mercator:
         _style_axis_mercator_degrees(
             ax,
@@ -847,6 +959,7 @@ def render_overlay_map(
             skip_margins=basemap_enabled,
             axis_tick_fontsize_x=axis_tick_fontsize_x,
             axis_tick_fontsize_y=axis_tick_fontsize_y,
+            show_coordinate_grid=show_coordinate_grid,
         )
     else:
         _style_axis(
@@ -858,13 +971,25 @@ def render_overlay_map(
             skip_margins=basemap_enabled,
             axis_tick_fontsize_x=axis_tick_fontsize_x,
             axis_tick_fontsize_y=axis_tick_fontsize_y,
+            show_coordinate_grid=show_coordinate_grid,
         )
     _apply_axis_inversion(ax, invert_x=invert_x, invert_y=invert_y)
 
-    mappable = plt.cm.ScalarMappable(cmap=cmap)
-    mappable.set_clim(vmin, vmax)
+    if bnorm is not None:
+        mappable = plt.cm.ScalarMappable(norm=bnorm, cmap=cmap)
+    else:
+        mappable = plt.cm.ScalarMappable(cmap=cmap)
+        mappable.set_clim(vmin, vmax)
     fig.colorbar(mappable, ax=ax, location="right", shrink=0.95)
     fig.subplots_adjust(left=0.08, right=0.94, top=0.93, bottom=0.11)
     if web_mercator:
         ax.set_aspect("equal")
+    _draw_scale_bars(
+        ax,
+        triangulation.x,
+        triangulation.y,
+        show_scale_bar_x=show_scale_bar_x,
+        show_scale_bar_y=show_scale_bar_y,
+        web_mercator=web_mercator,
+    )
     return fig

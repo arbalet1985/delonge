@@ -5,6 +5,7 @@ import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -33,6 +34,12 @@ from core.basemap import BasemapError, lon_lat_to_web_mercator, looks_like_wgs84
 from core.config import load_app_config
 from core.interpolation import build_triangulation
 from core.plotting import render_dual_maps, render_overlay_map
+from core.ui_state import (
+    default_ui_config_path,
+    default_ui_state_dict,
+    load_ui_state_from_file,
+    save_ui_state_to_file,
+)
 
 
 class MainWindow(QMainWindow):
@@ -69,6 +76,8 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self._build_charts_panel(), 1)
 
         self.setCentralWidget(central)
+        self._loading_ui_config = False
+        self._setup_menu_bar()
         self._apply_styles()
         self._redraw_debounce_timer = QTimer(self)
         self._redraw_debounce_timer.setSingleShot(True)
@@ -79,6 +88,7 @@ class MainWindow(QMainWindow):
         self._label_lon_lat_deg: tuple[np.ndarray, np.ndarray] | None = None
         self._sync_map_opacity_text()
         self._update_basemap_availability()
+        self._load_ui_config_auto()
 
     def _build_controls_panel(self) -> QWidget:
         panel = QWidget()
@@ -115,7 +125,7 @@ class MainWindow(QMainWindow):
         self.use_levels_step_checkbox.setChecked(False)
 
         self.levels_step_spin = QDoubleSpinBox()
-        self.levels_step_spin.setRange(0.0001, 1_000_000.0)
+        self.levels_step_spin.setRange(0.1, 1_000_000.0)
         self.levels_step_spin.setDecimals(4)
         self.levels_step_spin.setSingleStep(0.1)
         self.levels_step_spin.setValue(1.0)
@@ -136,13 +146,6 @@ class MainWindow(QMainWindow):
         self.axis_tick_font_y_spin.setRange(5, 18)
         self.axis_tick_font_y_spin.setValue(9)
         self.axis_tick_font_y_spin.setToolTip("Размер шрифта подписей делений по оси Y.")
-
-        self.rotation_deg_spin = QDoubleSpinBox()
-        self.rotation_deg_spin.setRange(-180.0, 180.0)
-        self.rotation_deg_spin.setDecimals(1)
-        self.rotation_deg_spin.setSingleStep(0.2)
-        self.rotation_deg_spin.setSuffix("°")
-        self.rotation_deg_spin.setValue(0.0)
 
         self.axis_margin_spin = QSpinBox()
         self.axis_margin_spin.setRange(0, 20)
@@ -203,16 +206,15 @@ class MainWindow(QMainWindow):
         self.map_view_rotation_spin.setSuffix("°")
         self.map_view_rotation_spin.setValue(0.0)
         self.map_view_rotation_spin.setToolTip(
-            "Поворот подложки и данных в плоскости карты (Web Mercator), вокруг центра области. "
-            "Оси остаются в исходном квадратном масштабе; подложка подгружается с запасом по углу поворота, "
-            "чтобы не было белых углов у рамки графика."
+            "Единый поворот карты: изолинии, точки и спутниковая подложка вращаются вместе "
+            "вокруг центра области (в плоскости Web Mercator). Оси — в исходных единицах; "
+            "подложка подгружается с запасом по углу, чтобы не было пустых углов."
         )
 
         self.basemap_checkbox = QCheckBox("Спутниковая подложка")
         self.basemap_checkbox.setChecked(False)
         self.basemap_checkbox.setToolTip(
-            "WGS84 в градусах; поворот данных (поле «Поворот карты») должен быть 0°. "
-            "Раскладка карт сверху вниз на подложку не влияет. Нужен интернет."
+            "WGS84 в градусах. Раскладка карт сверху вниз на подложку не влияет. Нужен интернет."
         )
 
         self.basemap_source_combo = QComboBox()
@@ -250,8 +252,6 @@ class MainWindow(QMainWindow):
         self.show_coordinates_checkbox.setChecked(False)
         self.show_rn_checkbox = QCheckBox("Показывать названия точек (rn)")
         self.show_rn_checkbox.setChecked(False)
-        self.show_scale_bar_checkbox = QCheckBox("Показывать шкалу масштаба")
-        self.show_scale_bar_checkbox.setChecked(True)
         self.show_contour_lines_checkbox = QCheckBox("Показывать изолинии")
         self.show_contour_lines_checkbox.setChecked(True)
 
@@ -263,7 +263,7 @@ class MainWindow(QMainWindow):
         self.contour_label_font_spin.setValue(8)
 
         self.contour_line_width_spin = QDoubleSpinBox()
-        self.contour_line_width_spin.setRange(0.3, 6.0)
+        self.contour_line_width_spin.setRange(0.1, 6.0)
         self.contour_line_width_spin.setDecimals(1)
         self.contour_line_width_spin.setSingleStep(0.1)
         self.contour_line_width_spin.setValue(1.0)
@@ -300,8 +300,8 @@ class MainWindow(QMainWindow):
         axis_tick_row_layout.addWidget(QLabel("Y"))
         axis_tick_row_layout.addWidget(self.axis_tick_font_y_spin)
         settings_layout.addWidget(axis_tick_row, 3, 1, 1, 2)
-        settings_layout.addWidget(QLabel("Поворот карты:"), 4, 0)
-        settings_layout.addWidget(self.rotation_deg_spin, 4, 1)
+        settings_layout.addWidget(QLabel("Поворот карты (°):"), 4, 0)
+        settings_layout.addWidget(self.map_view_rotation_spin, 4, 1)
         settings_layout.addWidget(QLabel("Отступ от рамки карты:"), 5, 0)
         settings_layout.addWidget(self.axis_margin_spin, 5, 1)
         settings_layout.addWidget(self.mercator_square_extent_checkbox, 6, 0, 1, 3)
@@ -317,12 +317,10 @@ class MainWindow(QMainWindow):
         settings_layout.addWidget(mercator_span_row, 7, 1, 1, 2)
         settings_layout.addWidget(QLabel("Сглаживание:"), 8, 0)
         settings_layout.addWidget(self.smoothing_spin, 8, 1)
-        settings_layout.addWidget(QLabel("Поворот вида (карта+подложка):"), 9, 0)
-        settings_layout.addWidget(self.map_view_rotation_spin, 9, 1)
-        settings_layout.addWidget(self.basemap_checkbox, 10, 0, 1, 3)
-        settings_layout.addWidget(QLabel("Источник подложки:"), 11, 0)
-        settings_layout.addWidget(self.basemap_source_combo, 11, 1, 1, 2)
-        settings_layout.addWidget(QLabel("Сдвиг подложки E / N (м):"), 12, 0)
+        settings_layout.addWidget(self.basemap_checkbox, 9, 0, 1, 3)
+        settings_layout.addWidget(QLabel("Источник подложки:"), 10, 0)
+        settings_layout.addWidget(self.basemap_source_combo, 10, 1, 1, 2)
+        settings_layout.addWidget(QLabel("Сдвиг подложки E / N (м):"), 11, 0)
         basemap_off_row = QWidget()
         basemap_off_row_layout = QHBoxLayout(basemap_off_row)
         basemap_off_row_layout.setContentsMargins(0, 0, 0, 0)
@@ -331,36 +329,86 @@ class MainWindow(QMainWindow):
         basemap_off_row_layout.addWidget(self.basemap_offset_e_spin)
         basemap_off_row_layout.addWidget(QLabel("N"))
         basemap_off_row_layout.addWidget(self.basemap_offset_n_spin)
-        settings_layout.addWidget(basemap_off_row, 12, 1, 1, 2)
-        settings_layout.addWidget(QLabel("Прозрачность слоя над подложкой:"), 13, 0)
-        settings_layout.addWidget(self.map_opacity_slider, 13, 1)
-        settings_layout.addWidget(self.map_opacity_label, 13, 2)
-        settings_layout.addWidget(QLabel("Прозрачность overlay:"), 14, 0)
-        settings_layout.addWidget(self.alpha_slider, 14, 1)
-        settings_layout.addWidget(self.alpha_label, 14, 2)
-        settings_layout.addWidget(QLabel("Градиент:"), 15, 0)
+        settings_layout.addWidget(basemap_off_row, 11, 1, 1, 2)
+        settings_layout.addWidget(QLabel("Прозрачность слоя над подложкой:"), 12, 0)
+        settings_layout.addWidget(self.map_opacity_slider, 12, 1)
+        settings_layout.addWidget(self.map_opacity_label, 12, 2)
+        settings_layout.addWidget(QLabel("Прозрачность overlay:"), 13, 0)
+        settings_layout.addWidget(self.alpha_slider, 13, 1)
+        settings_layout.addWidget(self.alpha_label, 13, 2)
+        settings_layout.addWidget(QLabel("Градиент:"), 14, 0)
         cmap_row = QWidget()
         cmap_row_layout = QHBoxLayout(cmap_row)
         cmap_row_layout.setContentsMargins(0, 0, 0, 0)
         cmap_row_layout.setSpacing(8)
         cmap_row_layout.addWidget(self.cmap_start_btn)
         cmap_row_layout.addWidget(self.cmap_end_btn)
-        settings_layout.addWidget(cmap_row, 15, 1, 1, 2)
-        settings_layout.addWidget(self.smooth_contours_checkbox, 16, 0, 1, 3)
-        settings_layout.addWidget(self.show_points_checkbox, 17, 0, 1, 3)
-        settings_layout.addWidget(self.show_coordinates_checkbox, 18, 0, 1, 3)
-        settings_layout.addWidget(self.show_rn_checkbox, 19, 0, 1, 3)
-        settings_layout.addWidget(self.show_scale_bar_checkbox, 20, 0, 1, 3)
-        settings_layout.addWidget(self.show_contour_lines_checkbox, 21, 0, 1, 3)
-        settings_layout.addWidget(self.show_contour_labels_checkbox, 22, 0, 1, 3)
-        settings_layout.addWidget(QLabel("Шрифт подписей изолиний:"), 23, 0)
-        settings_layout.addWidget(self.contour_label_font_spin, 23, 1)
-        settings_layout.addWidget(QLabel("Толщина изолиний:"), 24, 0)
-        settings_layout.addWidget(self.contour_line_width_spin, 24, 1)
-        settings_layout.addWidget(self.invert_x_checkbox, 25, 0, 1, 3)
-        settings_layout.addWidget(self.invert_y_checkbox, 26, 0, 1, 3)
-        settings_layout.addWidget(self.swap_xy_checkbox, 27, 0, 1, 3)
-        settings_layout.addWidget(self.enforce_mirror_checkbox, 28, 0, 1, 3)
+        settings_layout.addWidget(cmap_row, 14, 1, 1, 2)
+
+        self.use_custom_gradient_checkbox = QCheckBox("Свои цвета по градациям")
+        self.use_custom_gradient_checkbox.setChecked(False)
+        self.use_custom_gradient_checkbox.setToolTip(
+            "Дискретная расцветка: число градаций и отдельный цвет на каждую. "
+            "Иначе — плавный градиент между «Цвет 1» и «Цвет 2»."
+        )
+        self.gradient_steps_spin = QSpinBox()
+        self.gradient_steps_spin.setRange(2, 30)
+        self.gradient_steps_spin.setValue(8)
+        self.gradient_steps_spin.setToolTip("Сколько цветовых градаций (полос) на карте.")
+        self._gradient_color_buttons_per_row = 8
+        self.gradient_colors_widget = QWidget()
+        self.gradient_colors_layout = QGridLayout(self.gradient_colors_widget)
+        self.gradient_colors_layout.setContentsMargins(0, 0, 0, 0)
+        self.gradient_colors_layout.setHorizontalSpacing(4)
+        self.gradient_colors_layout.setVerticalSpacing(4)
+        self.custom_gradient_colors: list[str] = []
+        self._gradient_user_edited: set[int] = set()
+        self._init_default_gradient_colors(8)
+        self._rebuild_gradient_color_buttons()
+
+        grad_row = QWidget()
+        grad_row_layout = QHBoxLayout(grad_row)
+        grad_row_layout.setContentsMargins(0, 0, 0, 0)
+        grad_row_layout.setSpacing(8)
+        grad_row_layout.addWidget(self.use_custom_gradient_checkbox)
+        grad_row_layout.addWidget(QLabel("Градаций:"))
+        grad_row_layout.addWidget(self.gradient_steps_spin)
+        self.gradient_blend_btn = QPushButton("Градиент 1→N")
+        self.gradient_blend_btn.setToolTip(
+            "Равномерно в RGB между якорными плитками: первая и последняя градация и все плитки, "
+            "где вы уже выбирали цвет вручную — по очереди между соседними якорями."
+        )
+        self.gradient_blend_btn.clicked.connect(self._blend_gradient_colors_uniform)
+        grad_row_layout.addWidget(self.gradient_blend_btn)
+        grad_row_layout.addStretch(1)
+        settings_layout.addWidget(grad_row, 15, 0, 1, 3)
+        settings_layout.addWidget(QLabel("Цвета градаций:"), 16, 0)
+        settings_layout.addWidget(self.gradient_colors_widget, 16, 1, 1, 2)
+        self.use_custom_gradient_checkbox.toggled.connect(self._on_custom_gradient_toggled)
+
+        settings_layout.addWidget(self.smooth_contours_checkbox, 17, 0, 1, 3)
+        settings_layout.addWidget(self.show_points_checkbox, 18, 0, 1, 3)
+        settings_layout.addWidget(self.show_coordinates_checkbox, 19, 0, 1, 3)
+        settings_layout.addWidget(self.show_rn_checkbox, 20, 0, 1, 3)
+        self.show_coordinate_grid_checkbox = QCheckBox("Координатная сетка")
+        self.show_coordinate_grid_checkbox.setChecked(True)
+        settings_layout.addWidget(self.show_coordinate_grid_checkbox, 21, 0, 1, 3)
+        self.show_scale_bar_x_checkbox = QCheckBox("Шкала масштаба по X (горизонтально на экране)")
+        self.show_scale_bar_x_checkbox.setChecked(True)
+        self.show_scale_bar_y_checkbox = QCheckBox("Шкала масштаба по Y (вертикально на экране)")
+        self.show_scale_bar_y_checkbox.setChecked(False)
+        settings_layout.addWidget(self.show_scale_bar_x_checkbox, 22, 0, 1, 3)
+        settings_layout.addWidget(self.show_scale_bar_y_checkbox, 23, 0, 1, 3)
+        settings_layout.addWidget(self.show_contour_lines_checkbox, 24, 0, 1, 3)
+        settings_layout.addWidget(self.show_contour_labels_checkbox, 25, 0, 1, 3)
+        settings_layout.addWidget(QLabel("Шрифт подписей изолиний:"), 26, 0)
+        settings_layout.addWidget(self.contour_label_font_spin, 26, 1)
+        settings_layout.addWidget(QLabel("Толщина изолиний:"), 27, 0)
+        settings_layout.addWidget(self.contour_line_width_spin, 27, 1)
+        settings_layout.addWidget(self.invert_x_checkbox, 28, 0, 1, 3)
+        settings_layout.addWidget(self.invert_y_checkbox, 29, 0, 1, 3)
+        settings_layout.addWidget(self.swap_xy_checkbox, 30, 0, 1, 3)
+        settings_layout.addWidget(self.enforce_mirror_checkbox, 31, 0, 1, 3)
 
         self.toggle_settings_btn = QToolButton()
         self.toggle_settings_btn.setText("Свернуть параметры")
@@ -402,6 +450,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(actions)
 
         layout.addStretch(1)
+        self._on_custom_gradient_toggled(self.use_custom_gradient_checkbox.isChecked())
         return panel
 
     def _build_charts_panel(self) -> QWidget:
@@ -452,6 +501,346 @@ class MainWindow(QMainWindow):
         self._sync_cmap_button_styles()
         self._schedule_debounced_redraw()
 
+    def _init_default_gradient_colors(self, n: int) -> None:
+        """Равномерно от белого к чёрному (для стартового набора)."""
+        n = max(2, int(n))
+        self.custom_gradient_colors = []
+        self._gradient_user_edited = set()
+        for i in range(n):
+            t = i / max(n - 1, 1)
+            v = int(round(255 * (1.0 - t)))
+            self.custom_gradient_colors.append(f"#{v:02x}{v:02x}{v:02x}")
+
+    def _rebuild_gradient_color_buttons(self) -> None:
+        layout = self.gradient_colors_layout
+        while layout.count():
+            item = layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        n = self.gradient_steps_spin.value()
+        while len(self.custom_gradient_colors) < n:
+            self.custom_gradient_colors.append("#808080")
+        self.custom_gradient_colors = self.custom_gradient_colors[:n]
+        cols = self._gradient_color_buttons_per_row
+        for i in range(n):
+            btn = QPushButton(str(i + 1))
+            btn.setFixedWidth(34)
+            c = self.custom_gradient_colors[i]
+            btn.setStyleSheet(
+                f"background: {c}; color: #111; border-radius: 4px; padding: 3px; font-size: 11px;"
+            )
+            btn.clicked.connect(lambda checked=False, idx=i: self._pick_gradient_color(idx))
+            row, col = i // cols, i % cols
+            layout.addWidget(btn, row, col)
+
+    def _on_gradient_steps_changed(self) -> None:
+        n = self.gradient_steps_spin.value()
+        while len(self.custom_gradient_colors) < n:
+            self.custom_gradient_colors.append("#808080")
+        self.custom_gradient_colors = self.custom_gradient_colors[:n]
+        self._gradient_user_edited = {i for i in self._gradient_user_edited if i < n}
+        self._rebuild_gradient_color_buttons()
+        self._schedule_debounced_redraw()
+
+    def _on_custom_gradient_toggled(self, checked: bool) -> None:
+        self.cmap_start_btn.setEnabled(not checked)
+        self.cmap_end_btn.setEnabled(not checked)
+        self.gradient_steps_spin.setEnabled(checked)
+        self.gradient_colors_widget.setEnabled(checked)
+        self.gradient_blend_btn.setEnabled(checked)
+
+    def _pick_gradient_color(self, idx: int) -> None:
+        if not (0 <= idx < len(self.custom_gradient_colors)):
+            return
+        initial = QColor(self.custom_gradient_colors[idx])
+        color = QColorDialog.getColor(initial=initial, parent=self, title=f"Градация {idx + 1}")
+        if not color.isValid():
+            return
+        self.custom_gradient_colors[idx] = color.name()
+        self._gradient_user_edited.add(idx)
+        self._rebuild_gradient_color_buttons()
+        self._schedule_debounced_redraw()
+
+    def _custom_gradient_colors_for_render(self) -> list[str] | None:
+        if not self.use_custom_gradient_checkbox.isChecked():
+            return None
+        n = self.gradient_steps_spin.value()
+        return list(self.custom_gradient_colors[:n])
+
+    def _blend_gradient_colors_uniform(self) -> None:
+        """Линейная интерполяция RGB по сегментам между якорями: 1, N и вручную выбранные плитки."""
+        n = self.gradient_steps_spin.value()
+        if n < 2:
+            return
+        while len(self.custom_gradient_colors) < n:
+            self.custom_gradient_colors.append("#808080")
+        self.custom_gradient_colors = self.custom_gradient_colors[:n]
+        rng = set(range(n))
+        anchors = sorted({0, n - 1} | (self._gradient_user_edited & rng))
+        if len(anchors) < 2:
+            anchors = [0, n - 1]
+        for si in range(len(anchors) - 1):
+            ia, ib = anchors[si], anchors[si + 1]
+            ca = QColor(self.custom_gradient_colors[ia])
+            cb = QColor(self.custom_gradient_colors[ib])
+            span = ib - ia
+            if span <= 0:
+                continue
+            for j in range(ia, ib + 1):
+                t = (j - ia) / span
+                r = int(round(ca.red() + (cb.red() - ca.red()) * t))
+                g = int(round(ca.green() + (cb.green() - ca.green()) * t))
+                b = int(round(ca.blue() + (cb.blue() - ca.blue()) * t))
+                self.custom_gradient_colors[j] = f"#{r:02x}{g:02x}{b:02x}"
+        self._rebuild_gradient_color_buttons()
+        self._schedule_debounced_redraw()
+
+    def _setup_menu_bar(self) -> None:
+        menu = self.menuBar().addMenu("Настройки")
+        act_save = QAction("Сохранить конфигурацию в файл…", self)
+        act_save.triggered.connect(self._on_save_ui_config_as)
+        menu.addAction(act_save)
+        act_load = QAction("Загрузить конфигурацию из файла…", self)
+        act_load.triggered.connect(self._on_load_ui_config_from)
+        menu.addAction(act_load)
+        menu.addSeparator()
+        act_reset = QAction("Сбросить к значениям по умолчанию…", self)
+        act_reset.triggered.connect(self._on_reset_ui_config)
+        menu.addAction(act_reset)
+
+    def _collect_ui_state(self) -> dict:
+        src_key = self.basemap_source_combo.currentData()
+        src_key = str(src_key) if src_key is not None else "esri"
+        return {
+            **default_ui_state_dict(),
+            "cmap_start": self.cmap_start,
+            "cmap_end": self.cmap_end,
+            "levels_spin": self.levels_spin.value(),
+            "use_levels_step": self.use_levels_step_checkbox.isChecked(),
+            "levels_step": self.levels_step_spin.value(),
+            "point_size": self.point_size_spin.value(),
+            "annotation_font": self.annotation_font_spin.value(),
+            "axis_tick_font_x": self.axis_tick_font_x_spin.value(),
+            "axis_tick_font_y": self.axis_tick_font_y_spin.value(),
+            "axis_margin_pct": self.axis_margin_spin.value(),
+            "mercator_square": self.mercator_square_extent_checkbox.isChecked(),
+            "mercator_span_x_pct": self.mercator_span_x_spin.value(),
+            "mercator_span_y_pct": self.mercator_span_y_spin.value(),
+            "basemap_offset_e": self.basemap_offset_e_spin.value(),
+            "basemap_offset_n": self.basemap_offset_n_spin.value(),
+            "smoothing_pct": self.smoothing_spin.value(),
+            "map_view_rotation": self.map_view_rotation_spin.value(),
+            "basemap_enabled": self.basemap_checkbox.isChecked(),
+            "basemap_source_key": src_key,
+            "map_opacity_pct": self.map_opacity_slider.value(),
+            "overlay_alpha_pct": self.alpha_slider.value(),
+            "use_custom_gradient": self.use_custom_gradient_checkbox.isChecked(),
+            "gradient_steps": self.gradient_steps_spin.value(),
+            "custom_gradient_colors": list(self.custom_gradient_colors),
+            "gradient_user_edited_indices": sorted(self._gradient_user_edited),
+            "smooth_contours": self.smooth_contours_checkbox.isChecked(),
+            "show_points": self.show_points_checkbox.isChecked(),
+            "show_coordinates": self.show_coordinates_checkbox.isChecked(),
+            "show_rn": self.show_rn_checkbox.isChecked(),
+            "show_coordinate_grid": self.show_coordinate_grid_checkbox.isChecked(),
+            "show_scale_bar_x": self.show_scale_bar_x_checkbox.isChecked(),
+            "show_scale_bar_y": self.show_scale_bar_y_checkbox.isChecked(),
+            "show_contour_lines": self.show_contour_lines_checkbox.isChecked(),
+            "show_contour_labels": self.show_contour_labels_checkbox.isChecked(),
+            "contour_label_font": self.contour_label_font_spin.value(),
+            "contour_line_width": self.contour_line_width_spin.value(),
+            "invert_x": self.invert_x_checkbox.isChecked(),
+            "invert_y": self.invert_y_checkbox.isChecked(),
+            "swap_xy": self.swap_xy_checkbox.isChecked(),
+            "enforce_mirror": self.enforce_mirror_checkbox.isChecked(),
+            "horizontal_align_vertical": self.horizontal_align_btn.isChecked(),
+            "tabs_index": self.tabs.currentIndex(),
+            "settings_panel_expanded": self.toggle_settings_btn.isChecked(),
+            "last_excel_path": self.file_path,
+            "column_selections": {k: self.column_combos[k].currentText() for k in self.column_combos},
+        }
+
+    def _merge_ui_state(self, loaded: dict) -> dict:
+        base = default_ui_state_dict()
+        for k, v in loaded.items():
+            if k == "version":
+                continue
+            base[k] = v
+        return base
+
+    def _apply_ui_state(self, state: dict) -> None:
+        d = self._merge_ui_state(state)
+        self._loading_ui_config = True
+        try:
+            self.cmap_start = str(d["cmap_start"])
+            self.cmap_end = str(d["cmap_end"])
+            self.levels_spin.setValue(int(d["levels_spin"]))
+            self.use_levels_step_checkbox.setChecked(bool(d["use_levels_step"]))
+            self.levels_step_spin.setValue(float(d["levels_step"]))
+            self.point_size_spin.setValue(int(d["point_size"]))
+            self.annotation_font_spin.setValue(int(d["annotation_font"]))
+            self.axis_tick_font_x_spin.setValue(int(d["axis_tick_font_x"]))
+            self.axis_tick_font_y_spin.setValue(int(d["axis_tick_font_y"]))
+            self.axis_margin_spin.setValue(int(d["axis_margin_pct"]))
+            self.mercator_square_extent_checkbox.setChecked(bool(d["mercator_square"]))
+            self.mercator_span_x_spin.setValue(int(d["mercator_span_x_pct"]))
+            self.mercator_span_y_spin.setValue(int(d["mercator_span_y_pct"]))
+            self.basemap_offset_e_spin.setValue(float(d["basemap_offset_e"]))
+            self.basemap_offset_n_spin.setValue(float(d["basemap_offset_n"]))
+            self.smoothing_spin.setValue(int(d["smoothing_pct"]))
+            self.map_view_rotation_spin.setValue(float(d["map_view_rotation"]))
+            self.basemap_checkbox.setChecked(bool(d["basemap_enabled"]))
+            key = str(d.get("basemap_source_key") or "esri")
+            idx = self.basemap_source_combo.findData(key)
+            if idx < 0:
+                idx = 0
+            self.basemap_source_combo.setCurrentIndex(idx)
+            self.map_opacity_slider.setValue(int(d["map_opacity_pct"]))
+            self.alpha_slider.setValue(int(d["overlay_alpha_pct"]))
+            self.use_custom_gradient_checkbox.setChecked(bool(d["use_custom_gradient"]))
+            self.gradient_steps_spin.setValue(int(d["gradient_steps"]))
+            colors = d.get("custom_gradient_colors")
+            if isinstance(colors, list) and all(isinstance(c, str) for c in colors):
+                self.custom_gradient_colors = list(colors)
+            else:
+                self._init_default_gradient_colors(int(d["gradient_steps"]))
+            n = self.gradient_steps_spin.value()
+            while len(self.custom_gradient_colors) < n:
+                self.custom_gradient_colors.append("#808080")
+            self.custom_gradient_colors = self.custom_gradient_colors[:n]
+            raw_edited = d.get("gradient_user_edited_indices")
+            if isinstance(raw_edited, list) and all(isinstance(x, int) for x in raw_edited):
+                self._gradient_user_edited = {i for i in raw_edited if 0 <= i < n}
+            else:
+                self._gradient_user_edited = set()
+            self._rebuild_gradient_color_buttons()
+            self.smooth_contours_checkbox.setChecked(bool(d["smooth_contours"]))
+            self.show_points_checkbox.setChecked(bool(d["show_points"]))
+            self.show_coordinates_checkbox.setChecked(bool(d["show_coordinates"]))
+            self.show_rn_checkbox.setChecked(bool(d["show_rn"]))
+            self.show_coordinate_grid_checkbox.setChecked(bool(d["show_coordinate_grid"]))
+            self.show_scale_bar_x_checkbox.setChecked(bool(d["show_scale_bar_x"]))
+            self.show_scale_bar_y_checkbox.setChecked(bool(d["show_scale_bar_y"]))
+            self.show_contour_lines_checkbox.setChecked(bool(d["show_contour_lines"]))
+            self.show_contour_labels_checkbox.setChecked(bool(d["show_contour_labels"]))
+            self.contour_label_font_spin.setValue(int(d["contour_label_font"]))
+            self.contour_line_width_spin.setValue(float(d["contour_line_width"]))
+            self.invert_x_checkbox.setChecked(bool(d["invert_x"]))
+            self.invert_y_checkbox.setChecked(bool(d["invert_y"]))
+            self.swap_xy_checkbox.setChecked(bool(d["swap_xy"]))
+            self.enforce_mirror_checkbox.setChecked(bool(d["enforce_mirror"]))
+            self.horizontal_align_btn.setChecked(bool(d["horizontal_align_vertical"]))
+            self._sync_horizontal_align_btn_text(self.horizontal_align_btn.isChecked())
+            self.tabs.setCurrentIndex(int(d.get("tabs_index", 0)))
+            exp = bool(d.get("settings_panel_expanded", True))
+            self.toggle_settings_btn.setChecked(exp)
+            self.settings_group.setVisible(exp)
+            self.toggle_settings_btn.setText("Свернуть параметры" if exp else "Развернуть параметры")
+            self._sync_cmap_button_styles()
+            self._on_custom_gradient_toggled(self.use_custom_gradient_checkbox.isChecked())
+            self._sync_map_opacity_text()
+            self._sync_alpha_text()
+            self._restore_excel_session_from_state(d)
+            self._update_basemap_availability()
+        finally:
+            self._loading_ui_config = False
+
+    def _restore_excel_session_from_state(self, d: dict) -> None:
+        path = d.get("last_excel_path")
+        if not path or not isinstance(path, str):
+            self.file_path = None
+            self.file_label.setText("Файл: не выбран")
+            return
+        p = Path(path)
+        if not p.is_file():
+            self.file_path = None
+            self.file_label.setText("Файл: не выбран")
+            return
+        try:
+            headers = read_excel_headers(str(p))
+        except OSError:
+            self.file_path = None
+            self.file_label.setText("Файл: не выбран")
+            return
+        self.file_path = str(p)
+        self.file_label.setText(f"Файл: {p}")
+        self._fill_column_combos(headers)
+        cols = d.get("column_selections") or {}
+        if isinstance(cols, dict):
+            for key in ("rn", "x", "y", "ap", "ac"):
+                name = str(cols.get(key, "")).strip()
+                if name and self.column_combos[key].findText(name) >= 0:
+                    self.column_combos[key].setCurrentText(name)
+        self._prepare_data_silently()
+
+    def _load_ui_config_auto(self) -> None:
+        path = default_ui_config_path()
+        raw = load_ui_state_from_file(path)
+        if raw is None:
+            return
+        self._apply_ui_state(raw)
+        self._schedule_debounced_redraw()
+
+    def _on_save_ui_config_as(self) -> None:
+        path_str, _ = QFileDialog.getSaveFileName(
+            self,
+            "Сохранить конфигурацию",
+            str(Path.cwd() / "pasha_ui_config.json"),
+            "JSON (*.json)",
+        )
+        if not path_str:
+            return
+        try:
+            save_ui_state_to_file(Path(path_str), self._collect_ui_state())
+        except OSError as exc:
+            QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить: {exc}")
+            return
+        QMessageBox.information(self, "Готово", f"Конфигурация сохранена:\n{path_str}")
+
+    def _on_load_ui_config_from(self) -> None:
+        path_str, _ = QFileDialog.getOpenFileName(
+            self,
+            "Загрузить конфигурацию",
+            str(Path.cwd()),
+            "JSON (*.json)",
+        )
+        if not path_str:
+            return
+        raw = load_ui_state_from_file(Path(path_str))
+        if raw is None:
+            QMessageBox.warning(self, "Ошибка", "Не удалось прочитать файл.")
+            return
+        self._apply_ui_state(raw)
+        self._schedule_debounced_redraw()
+        QMessageBox.information(self, "Готово", "Конфигурация загружена.")
+
+    def _on_reset_ui_config(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Сброс",
+            "Сбросить все параметры интерфейса к значениям по умолчанию?\n"
+            "Текущий файл данных будет отвязан, если не указан в сохранённой сессии.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._apply_ui_state(default_ui_state_dict())
+        try:
+            save_ui_state_to_file(default_ui_config_path(), self._collect_ui_state())
+        except OSError:
+            pass
+        self._schedule_debounced_redraw()
+        QMessageBox.information(self, "Готово", "Параметры сброшены. Автосохранение записано в файл по умолчанию.")
+
+    def closeEvent(self, event) -> None:
+        try:
+            save_ui_state_to_file(default_ui_config_path(), self._collect_ui_state())
+        except OSError:
+            pass
+        super().closeEvent(event)
+
     def _sync_alpha_text(self) -> None:
         self.alpha_label.setText(f"{self.alpha_slider.value() / 100:.2f}")
 
@@ -459,8 +848,6 @@ class MainWindow(QMainWindow):
         self.map_opacity_label.setText(f"{self.map_opacity_slider.value() / 100:.2f}")
 
     def _basemap_allowed(self) -> bool:
-        if abs(self.rotation_deg_spin.value()) > 1e-6:
-            return False
         if not self.file_path:
             return False
         try:
@@ -504,7 +891,7 @@ class MainWindow(QMainWindow):
         self.basemap_checkbox.setToolTip(
             "Спутник по координатам WGS84 (нужен интернет)."
             if allowed
-            else "Недоступно: WGS84 в градусах и поворот данных 0°."
+            else "Недоступно: координаты должны быть WGS84 в градусах."
         )
 
     def _connect_live_redraw_signals(self) -> None:
@@ -513,7 +900,10 @@ class MainWindow(QMainWindow):
             self.show_points_checkbox,
             self.show_coordinates_checkbox,
             self.show_rn_checkbox,
-            self.show_scale_bar_checkbox,
+            self.show_coordinate_grid_checkbox,
+            self.show_scale_bar_x_checkbox,
+            self.show_scale_bar_y_checkbox,
+            self.use_custom_gradient_checkbox,
             self.show_contour_lines_checkbox,
             self.show_contour_labels_checkbox,
             self.use_levels_step_checkbox,
@@ -541,13 +931,13 @@ class MainWindow(QMainWindow):
         self.axis_tick_font_y_spin.valueChanged.connect(self._schedule_debounced_redraw)
         self.contour_label_font_spin.valueChanged.connect(self._schedule_debounced_redraw)
         self.contour_line_width_spin.valueChanged.connect(self._schedule_debounced_redraw)
-        self.rotation_deg_spin.valueChanged.connect(self._schedule_debounced_redraw)
         self.map_view_rotation_spin.valueChanged.connect(self._schedule_debounced_redraw)
         self.axis_margin_spin.valueChanged.connect(self._schedule_debounced_redraw)
         self.mercator_span_x_spin.valueChanged.connect(self._schedule_debounced_redraw)
         self.mercator_span_y_spin.valueChanged.connect(self._schedule_debounced_redraw)
         self.basemap_offset_e_spin.valueChanged.connect(self._schedule_debounced_redraw)
         self.basemap_offset_n_spin.valueChanged.connect(self._schedule_debounced_redraw)
+        self.gradient_steps_spin.valueChanged.connect(self._on_gradient_steps_changed)
         self.smoothing_spin.valueChanged.connect(self._schedule_debounced_redraw)
 
     def _can_prepare_data_silently(self) -> bool:
@@ -571,7 +961,6 @@ class MainWindow(QMainWindow):
             else:
                 x = self.data["x"].to_numpy(dtype=float)
                 y = self.data["y"].to_numpy(dtype=float)
-            x, y = self._rotate_points_by_degrees(x, y, self.rotation_deg_spin.value())
             use_basemap = self.basemap_checkbox.isChecked() and self._basemap_allowed()
             if use_basemap:
                 self._label_lon_lat_deg = (np.asarray(x, dtype=float), np.asarray(y, dtype=float))
@@ -588,10 +977,14 @@ class MainWindow(QMainWindow):
 
     def _schedule_debounced_redraw(self) -> None:
         """Перерисовка с задержкой, чтобы бегунки и спины не вызывали тяжёлый рендер на каждый шаг."""
+        if getattr(self, "_loading_ui_config", False):
+            return
         self._redraw_debounce_timer.stop()
         self._redraw_debounce_timer.start()
 
     def _flush_debounced_redraw(self) -> None:
+        if getattr(self, "_loading_ui_config", False):
+            return
         self._update_basemap_availability()
         if not self._prepare_data_silently():
             return
@@ -606,19 +999,6 @@ class MainWindow(QMainWindow):
 
     def _sync_horizontal_align_btn_text(self, checked: bool) -> None:
         self.horizontal_align_btn.setText("Карты: сверху вниз" if checked else "Карты: слева направо")
-
-    def _rotate_points_by_degrees(self, x: np.ndarray, y: np.ndarray, degrees: float) -> tuple[np.ndarray, np.ndarray]:
-        if abs(degrees) < 1e-9:
-            return x, y
-        points = np.column_stack((x, y))
-        center = points.mean(axis=0)
-        centered = points - center
-        theta = float(np.deg2rad(degrees))
-        cos_t = float(np.cos(theta))
-        sin_t = float(np.sin(theta))
-        rotation_matrix = np.array([[cos_t, -sin_t], [sin_t, cos_t]])
-        rotated = centered @ rotation_matrix.T + center
-        return rotated[:, 0], rotated[:, 1]
 
     def on_load_excel(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
@@ -703,7 +1083,6 @@ class MainWindow(QMainWindow):
                 x = self.data["x"].to_numpy(dtype=float)
                 y = self.data["y"].to_numpy(dtype=float)
 
-            x, y = self._rotate_points_by_degrees(x, y, self.rotation_deg_spin.value())
             use_basemap = self.basemap_checkbox.isChecked() and self._basemap_allowed()
             if use_basemap:
                 self._label_lon_lat_deg = (np.asarray(x, dtype=float), np.asarray(y, dtype=float))
@@ -752,7 +1131,9 @@ class MainWindow(QMainWindow):
                 show_coordinates=self.show_coordinates_checkbox.isChecked(),
                 show_rn_labels=self.show_rn_checkbox.isChecked(),
                 rn_labels=rn_labels,
-                show_scale_bar=self.show_scale_bar_checkbox.isChecked(),
+                show_coordinate_grid=self.show_coordinate_grid_checkbox.isChecked(),
+                show_scale_bar_x=self.show_scale_bar_x_checkbox.isChecked(),
+                show_scale_bar_y=self.show_scale_bar_y_checkbox.isChecked(),
                 invert_x=self.invert_x_checkbox.isChecked(),
                 invert_y=self.invert_y_checkbox.isChecked(),
                 x_label=axis_x_label,
@@ -766,6 +1147,7 @@ class MainWindow(QMainWindow):
                 axis_margin=self.axis_margin_spin.value() / 100.0,
                 cmap_start=self.cmap_start,
                 cmap_end=self.cmap_end,
+                custom_gradient_colors=self._custom_gradient_colors_for_render(),
                 basemap_enabled=basemap_on,
                 map_layer_alpha=self.map_opacity_slider.value() / 100.0,
                 web_mercator=self._using_web_mercator,
@@ -820,7 +1202,9 @@ class MainWindow(QMainWindow):
                 show_coordinates=self.show_coordinates_checkbox.isChecked(),
                 show_rn_labels=self.show_rn_checkbox.isChecked(),
                 rn_labels=rn_labels,
-                show_scale_bar=self.show_scale_bar_checkbox.isChecked(),
+                show_coordinate_grid=self.show_coordinate_grid_checkbox.isChecked(),
+                show_scale_bar_x=self.show_scale_bar_x_checkbox.isChecked(),
+                show_scale_bar_y=self.show_scale_bar_y_checkbox.isChecked(),
                 invert_x=self.invert_x_checkbox.isChecked(),
                 invert_y=self.invert_y_checkbox.isChecked(),
                 x_label=axis_x_label,
@@ -833,6 +1217,7 @@ class MainWindow(QMainWindow):
                 axis_margin=self.axis_margin_spin.value() / 100.0,
                 cmap_start=self.cmap_start,
                 cmap_end=self.cmap_end,
+                custom_gradient_colors=self._custom_gradient_colors_for_render(),
                 basemap_enabled=basemap_on,
                 map_layer_alpha=self.map_opacity_slider.value() / 100.0,
                 web_mercator=self._using_web_mercator,
