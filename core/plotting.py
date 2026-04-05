@@ -587,6 +587,7 @@ def render_dual_maps(
     mercator_span_scale_y: float = 1.0,
     basemap_offset_east_m: float = 0.0,
     basemap_offset_north_m: float = 0.0,
+    show_isoline_map: bool = True,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
     fill_levels, contour_levels, vmin, vmax, cmap, bnorm = _build_fill_cmap_and_norm(
@@ -655,55 +656,58 @@ def render_dual_maps(
             basemap_offset_north_m=basemap_offset_north_m,
         )
 
-    if smooth_contours:
-        xg_ap, yg_ap, zg_ap = _interpolate_to_grid(triangulation, ap_plot, grid_size=grid_size, smooth_sigma=smooth_sigma)
-        cf_ap = axes[0].contourf(
-            xg_ap,
-            yg_ap,
-            zg_ap,
-            levels=fill_levels,
-            cmap=cmap,
-            alpha=fill_alpha,
-            zorder=1,
-            **_cf_extras,
-            **kw0,
-        )
-        if show_contour_lines:
-            cs = axes[0].contour(
+    if show_isoline_map:
+        if smooth_contours:
+            xg_ap, yg_ap, zg_ap = _interpolate_to_grid(
+                triangulation, ap_plot, grid_size=grid_size, smooth_sigma=smooth_sigma
+            )
+            cf_ap = axes[0].contourf(
                 xg_ap,
                 yg_ap,
                 zg_ap,
-                levels=contour_levels,
-                colors="#101010",
-                linewidths=float(contour_line_width),
-                alpha=1.0,
+                levels=fill_levels,
+                cmap=cmap,
+                alpha=fill_alpha,
+                zorder=1,
+                **_cf_extras,
                 **kw0,
             )
-            if show_contour_labels:
-                axes[0].clabel(cs, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
-    else:
-        cf_ap = axes[0].tricontourf(
-            triangulation,
-            ap_plot,
-            levels=fill_levels,
-            cmap=cmap,
-            alpha=fill_alpha,
-            zorder=1,
-            **_cf_extras,
-            **kw0,
-        )
-        if show_contour_lines:
-            cs = axes[0].tricontour(
+            if show_contour_lines:
+                cs = axes[0].contour(
+                    xg_ap,
+                    yg_ap,
+                    zg_ap,
+                    levels=contour_levels,
+                    colors="#101010",
+                    linewidths=float(contour_line_width),
+                    alpha=1.0,
+                    **kw0,
+                )
+                if show_contour_labels:
+                    axes[0].clabel(cs, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
+        else:
+            cf_ap = axes[0].tricontourf(
                 triangulation,
                 ap_plot,
-                levels=contour_levels,
-                colors="#101010",
-                linewidths=float(contour_line_width),
-                alpha=1.0,
+                levels=fill_levels,
+                cmap=cmap,
+                alpha=fill_alpha,
+                zorder=1,
+                **_cf_extras,
                 **kw0,
             )
-            if show_contour_labels:
-                axes[0].clabel(cs, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
+            if show_contour_lines:
+                cs = axes[0].tricontour(
+                    triangulation,
+                    ap_plot,
+                    levels=contour_levels,
+                    colors="#101010",
+                    linewidths=float(contour_line_width),
+                    alpha=1.0,
+                    **kw0,
+                )
+                if show_contour_labels:
+                    axes[0].clabel(cs, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
     _draw_points_and_labels(
         axes[0],
         triangulation.x,
@@ -749,57 +753,61 @@ def render_dual_maps(
             show_coordinate_grid=show_coordinate_grid,
         )
     _apply_axis_inversion(axes[0], invert_x=invert_x, invert_y=invert_y)
-    fig.colorbar(cf_ap, ax=axes[0], location="right", shrink=0.95)
+    if show_isoline_map:
+        fig.colorbar(cf_ap, ax=axes[0], location="right", shrink=0.95)
 
-    if smooth_contours:
-        xg_ac, yg_ac, zg_ac = _interpolate_to_grid(triangulation, ac_plot, grid_size=grid_size, smooth_sigma=smooth_sigma)
-        cf_ac = axes[1].contourf(
-            xg_ac,
-            yg_ac,
-            zg_ac,
-            levels=fill_levels,
-            cmap=cmap,
-            alpha=fill_alpha,
-            zorder=1,
-            **_cf_extras,
-            **kw1,
-        )
-        if show_contour_lines:
-            cs = axes[1].contour(
+    if show_isoline_map:
+        if smooth_contours:
+            xg_ac, yg_ac, zg_ac = _interpolate_to_grid(
+                triangulation, ac_plot, grid_size=grid_size, smooth_sigma=smooth_sigma
+            )
+            cf_ac = axes[1].contourf(
                 xg_ac,
                 yg_ac,
                 zg_ac,
-                levels=contour_levels,
-                colors="#101010",
-                linewidths=float(contour_line_width),
-                alpha=1.0,
+                levels=fill_levels,
+                cmap=cmap,
+                alpha=fill_alpha,
+                zorder=1,
+                **_cf_extras,
                 **kw1,
             )
-            if show_contour_labels:
-                axes[1].clabel(cs, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
-    else:
-        cf_ac = axes[1].tricontourf(
-            triangulation,
-            ac_plot,
-            levels=fill_levels,
-            cmap=cmap,
-            alpha=fill_alpha,
-            zorder=1,
-            **_cf_extras,
-            **kw1,
-        )
-        if show_contour_lines:
-            cs = axes[1].tricontour(
+            if show_contour_lines:
+                cs = axes[1].contour(
+                    xg_ac,
+                    yg_ac,
+                    zg_ac,
+                    levels=contour_levels,
+                    colors="#101010",
+                    linewidths=float(contour_line_width),
+                    alpha=1.0,
+                    **kw1,
+                )
+                if show_contour_labels:
+                    axes[1].clabel(cs, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
+        else:
+            cf_ac = axes[1].tricontourf(
                 triangulation,
                 ac_plot,
-                levels=contour_levels,
-                colors="#101010",
-                linewidths=float(contour_line_width),
-                alpha=1.0,
+                levels=fill_levels,
+                cmap=cmap,
+                alpha=fill_alpha,
+                zorder=1,
+                **_cf_extras,
                 **kw1,
             )
-            if show_contour_labels:
-                axes[1].clabel(cs, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
+            if show_contour_lines:
+                cs = axes[1].tricontour(
+                    triangulation,
+                    ac_plot,
+                    levels=contour_levels,
+                    colors="#101010",
+                    linewidths=float(contour_line_width),
+                    alpha=1.0,
+                    **kw1,
+                )
+                if show_contour_labels:
+                    axes[1].clabel(cs, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
     _draw_points_and_labels(
         axes[1],
         triangulation.x,
@@ -845,7 +853,8 @@ def render_dual_maps(
             show_coordinate_grid=show_coordinate_grid,
         )
     _apply_axis_inversion(axes[1], invert_x=invert_x, invert_y=invert_y)
-    fig.colorbar(cf_ac, ax=axes[1], location="right", shrink=0.95)
+    if show_isoline_map:
+        fig.colorbar(cf_ac, ax=axes[1], location="right", shrink=0.95)
 
     if vertical_layout:
         fig.subplots_adjust(left=0.07, right=0.98, top=0.93, bottom=0.07, hspace=0.3)
@@ -942,6 +951,7 @@ def render_overlay_map(
     mercator_span_scale_y: float = 1.0,
     basemap_offset_east_m: float = 0.0,
     basemap_offset_north_m: float = 0.0,
+    show_isoline_map: bool = True,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
     fill_levels, contour_levels, vmin, vmax, cmap, bnorm = _build_fill_cmap_and_norm(
@@ -987,97 +997,115 @@ def render_overlay_map(
             basemap_offset_north_m=basemap_offset_north_m,
         )
 
-    if smooth_contours:
-        xg_ap, yg_ap, zg_ap = _interpolate_to_grid(triangulation, ap_plot, grid_size=grid_size, smooth_sigma=smooth_sigma)
-        xg_ac, yg_ac, zg_ac = _interpolate_to_grid(triangulation, ac_plot, grid_size=grid_size, smooth_sigma=smooth_sigma)
-        ap_fill_alpha = max(0.2, min(0.85, alpha * 0.8)) * map_alpha_factor
-        ac_fill_alpha = max(0.2, min(0.85, (1.0 - alpha) * 0.8)) * map_alpha_factor
-        ax.contourf(
-            xg_ap,
-            yg_ap,
-            zg_ap,
-            levels=fill_levels,
-            cmap=cmap,
-            alpha=ap_fill_alpha,
-            antialiased=False,
-            zorder=1,
-            **_cf_extras,
-            **kw,
-        )
-        ax.contourf(
-            xg_ac,
-            yg_ac,
-            zg_ac,
-            levels=fill_levels,
-            cmap=cmap,
-            alpha=ac_fill_alpha,
-            antialiased=False,
-            zorder=1,
-            **_cf_extras,
-            **kw,
-        )
-        if show_contour_lines:
-            lw_main = float(contour_line_width)
-            cs1 = ax.contour(
-                xg_ap, yg_ap, zg_ap, levels=contour_levels, colors="#000000", linewidths=lw_main, alpha=1.0, **kw
+    if show_isoline_map:
+        if smooth_contours:
+            xg_ap, yg_ap, zg_ap = _interpolate_to_grid(
+                triangulation, ap_plot, grid_size=grid_size, smooth_sigma=smooth_sigma
             )
-            cs2 = ax.contour(
+            xg_ac, yg_ac, zg_ac = _interpolate_to_grid(
+                triangulation, ac_plot, grid_size=grid_size, smooth_sigma=smooth_sigma
+            )
+            ap_fill_alpha = max(0.2, min(0.85, alpha * 0.8)) * map_alpha_factor
+            ac_fill_alpha = max(0.2, min(0.85, (1.0 - alpha) * 0.8)) * map_alpha_factor
+            ax.contourf(
+                xg_ap,
+                yg_ap,
+                zg_ap,
+                levels=fill_levels,
+                cmap=cmap,
+                alpha=ap_fill_alpha,
+                antialiased=False,
+                zorder=1,
+                **_cf_extras,
+                **kw,
+            )
+            ax.contourf(
                 xg_ac,
                 yg_ac,
                 zg_ac,
-                levels=contour_levels,
-                colors="#222222",
-                linewidths=max(0.3, lw_main * 0.9),
-                alpha=1.0,
-                linestyles="dashed",
+                levels=fill_levels,
+                cmap=cmap,
+                alpha=ac_fill_alpha,
+                antialiased=False,
+                zorder=1,
+                **_cf_extras,
                 **kw,
             )
-            if show_contour_labels:
-                ax.clabel(cs1, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
-                ax.clabel(cs2, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
-    else:
-        ap_fill_alpha = max(0.2, min(0.85, alpha * 0.8)) * map_alpha_factor
-        ac_fill_alpha = max(0.2, min(0.85, (1.0 - alpha) * 0.8)) * map_alpha_factor
-        ax.tricontourf(
-            triangulation,
-            ap_plot,
-            levels=fill_levels,
-            cmap=cmap,
-            alpha=ap_fill_alpha,
-            antialiased=False,
-            zorder=1,
-            **_cf_extras,
-            **kw,
-        )
-        ax.tricontourf(
-            triangulation,
-            ac_plot,
-            levels=fill_levels,
-            cmap=cmap,
-            alpha=ac_fill_alpha,
-            antialiased=False,
-            zorder=1,
-            **_cf_extras,
-            **kw,
-        )
-        if show_contour_lines:
-            lw_main = float(contour_line_width)
-            cs1 = ax.tricontour(
-                triangulation, ap_plot, levels=contour_levels, colors="#000000", linewidths=lw_main, alpha=1.0, **kw
+            if show_contour_lines:
+                lw_main = float(contour_line_width)
+                cs1 = ax.contour(
+                    xg_ap,
+                    yg_ap,
+                    zg_ap,
+                    levels=contour_levels,
+                    colors="#000000",
+                    linewidths=lw_main,
+                    alpha=1.0,
+                    **kw,
+                )
+                cs2 = ax.contour(
+                    xg_ac,
+                    yg_ac,
+                    zg_ac,
+                    levels=contour_levels,
+                    colors="#222222",
+                    linewidths=max(0.3, lw_main * 0.9),
+                    alpha=1.0,
+                    linestyles="dashed",
+                    **kw,
+                )
+                if show_contour_labels:
+                    ax.clabel(cs1, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
+                    ax.clabel(cs2, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
+        else:
+            ap_fill_alpha = max(0.2, min(0.85, alpha * 0.8)) * map_alpha_factor
+            ac_fill_alpha = max(0.2, min(0.85, (1.0 - alpha) * 0.8)) * map_alpha_factor
+            ax.tricontourf(
+                triangulation,
+                ap_plot,
+                levels=fill_levels,
+                cmap=cmap,
+                alpha=ap_fill_alpha,
+                antialiased=False,
+                zorder=1,
+                **_cf_extras,
+                **kw,
             )
-            cs2 = ax.tricontour(
+            ax.tricontourf(
                 triangulation,
                 ac_plot,
-                levels=contour_levels,
-                colors="#222222",
-                linewidths=max(0.3, lw_main * 0.9),
-                alpha=1.0,
-                linestyles="dashed",
+                levels=fill_levels,
+                cmap=cmap,
+                alpha=ac_fill_alpha,
+                antialiased=False,
+                zorder=1,
+                **_cf_extras,
                 **kw,
             )
-            if show_contour_labels:
-                ax.clabel(cs1, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
-                ax.clabel(cs2, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
+            if show_contour_lines:
+                lw_main = float(contour_line_width)
+                cs1 = ax.tricontour(
+                    triangulation,
+                    ap_plot,
+                    levels=contour_levels,
+                    colors="#000000",
+                    linewidths=lw_main,
+                    alpha=1.0,
+                    **kw,
+                )
+                cs2 = ax.tricontour(
+                    triangulation,
+                    ac_plot,
+                    levels=contour_levels,
+                    colors="#222222",
+                    linewidths=max(0.3, lw_main * 0.9),
+                    alpha=1.0,
+                    linestyles="dashed",
+                    **kw,
+                )
+                if show_contour_labels:
+                    ax.clabel(cs1, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
+                    ax.clabel(cs2, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
     _draw_points_and_labels(
         ax,
         triangulation.x,
@@ -1124,12 +1152,13 @@ def render_overlay_map(
         )
     _apply_axis_inversion(ax, invert_x=invert_x, invert_y=invert_y)
 
-    if bnorm is not None:
-        mappable = plt.cm.ScalarMappable(norm=bnorm, cmap=cmap)
-    else:
-        mappable = plt.cm.ScalarMappable(cmap=cmap)
-        mappable.set_clim(vmin, vmax)
-    fig.colorbar(mappable, ax=ax, location="right", shrink=0.95)
+    if show_isoline_map:
+        if bnorm is not None:
+            mappable = plt.cm.ScalarMappable(norm=bnorm, cmap=cmap)
+        else:
+            mappable = plt.cm.ScalarMappable(cmap=cmap)
+            mappable.set_clim(vmin, vmax)
+        fig.colorbar(mappable, ax=ax, location="right", shrink=0.95)
     fig.subplots_adjust(left=0.08, right=0.94, top=0.93, bottom=0.11)
     if web_mercator:
         _finalize_web_mercator_aspect_after_layout(

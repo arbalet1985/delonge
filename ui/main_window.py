@@ -293,6 +293,13 @@ class MainWindow(QMainWindow):
             "в Web Mercator для карты; подложка только добавляет растр. Нужен интернет."
         )
 
+        self.show_isoline_map_checkbox = QCheckBox("Карта изолиний Ap/Ac")
+        self.show_isoline_map_checkbox.setChecked(True)
+        self.show_isoline_map_checkbox.setToolTip(
+            "Снять галочку, чтобы скрыть заливку и изолинии и оставить только подложку "
+            "(и точки, сетку, масштаб — если они включены ниже)."
+        )
+
         self.basemap_source_combo = QComboBox()
         self.basemap_source_combo.addItem("Esri World Imagery (тайлы)", "esri")
         self.basemap_source_combo.addItem("Yandex схема (Static API)", "yandex")
@@ -527,6 +534,7 @@ class MainWindow(QMainWindow):
         g_bm = QGroupBox("Подложка")
         fl_bm = _compact_form(g_bm)
         fl_bm.addRow(self.basemap_checkbox)
+        fl_bm.addRow(self.show_isoline_map_checkbox)
         fl_bm.addRow("Источник:", self.basemap_source_combo)
         fl_bm.addRow("Сдвиг:", basemap_off_row)
         fl_bm.addRow("Слой / подложка:", map_opacity_row)
@@ -807,6 +815,7 @@ class MainWindow(QMainWindow):
             "smoothing_pct": self.smoothing_spin.value(),
             "map_view_rotation": self.map_view_rotation_spin.value(),
             "basemap_enabled": self.basemap_checkbox.isChecked(),
+            "show_isoline_map": self.show_isoline_map_checkbox.isChecked(),
             "basemap_source_key": src_key,
             "map_opacity_pct": self.map_opacity_slider.value(),
             "overlay_alpha_pct": self.alpha_slider.value(),
@@ -890,6 +899,7 @@ class MainWindow(QMainWindow):
             self.smoothing_spin.setValue(int(d["smoothing_pct"]))
             self.map_view_rotation_spin.setValue(float(d["map_view_rotation"]))
             self.basemap_checkbox.setChecked(bool(d["basemap_enabled"]))
+            self.show_isoline_map_checkbox.setChecked(bool(d.get("show_isoline_map", True)))
             key = str(d.get("basemap_source_key") or "esri")
             idx = self.basemap_source_combo.findData(key)
             if idx < 0:
@@ -1125,6 +1135,7 @@ class MainWindow(QMainWindow):
             self.swap_xy_checkbox,
             self.smooth_contours_checkbox,
             self.basemap_checkbox,
+            self.show_isoline_map_checkbox,
             self.mercator_square_extent_checkbox,
         ]
         for checkbox in live_checkboxes:
@@ -1379,6 +1390,7 @@ class MainWindow(QMainWindow):
                 mercator_span_scale_y=self.mercator_span_y_spin.value() / 100.0 * _extent_z,
                 basemap_offset_east_m=self.basemap_offset_e_spin.value(),
                 basemap_offset_north_m=self.basemap_offset_n_spin.value(),
+                show_isoline_map=self.show_isoline_map_checkbox.isChecked(),
             )
         except BasemapError as exc:
             self._show_error(str(exc))
@@ -1450,6 +1462,7 @@ class MainWindow(QMainWindow):
                 mercator_span_scale_y=self.mercator_span_y_spin.value() / 100.0 * _extent_z,
                 basemap_offset_east_m=self.basemap_offset_e_spin.value(),
                 basemap_offset_north_m=self.basemap_offset_n_spin.value(),
+                show_isoline_map=self.show_isoline_map_checkbox.isChecked(),
             )
         except BasemapError as exc:
             self._show_error(str(exc))
