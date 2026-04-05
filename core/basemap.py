@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -9,6 +10,7 @@ from typing import TYPE_CHECKING
 import contextily as ctx
 import numpy as np
 from matplotlib import pyplot as plt
+from matplotlib.transforms import Affine2D
 from pyproj import Transformer
 from scipy.ndimage import map_coordinates
 
@@ -230,6 +232,34 @@ def _extent_with_basemap_offset_m(
     return (x0 + ox, x1 + ox, y0 + oy, y1 + oy)
 
 
+def _add_rgba_basemap_axes_image(
+    ax,
+    img: np.ndarray,
+    *,
+    extent: tuple[float, float, float, float],
+    transform,
+    zorder: float,
+    origin: str = "upper",
+):
+    """RGB(A) растр без ``imshow(..., aspect=...)``: у ``imshow`` параметр *aspect* вызывает ``ax.set_aspect`` и сбрасывает 1:1 м после ``finalize``, из‑за чего подложка не следует «Общий %» / span."""
+    from matplotlib.image import AxesImage
+
+    im = AxesImage(
+        ax,
+        extent=extent,
+        origin=origin,
+        transform=transform,
+        zorder=zorder,
+        interpolation="hanning",
+    )
+    im.set_data(img)
+    if im.get_clip_path() is None:
+        im.set_clip_path(ax.patch)
+    ax.add_image(im)
+    im.set_extent(im.get_extent())
+    return im
+
+
 def _merge_mercator_fetch_extents(
     a: tuple[tuple[float, float], tuple[float, float]],
     b: tuple[tuple[float, float], tuple[float, float]],
@@ -239,6 +269,130 @@ def _merge_mercator_fetch_extents(
     bx0, bx1 = sorted((float(b[0][0]), float(b[0][1])))
     by0, by1 = sorted((float(b[1][0]), float(b[1][1])))
     return (min(ax0, bx0), max(ax1, bx1)), (min(ay0, by0), max(ay1, by1))
+
+
+def _apply_rotated_basemap_clip_to_axes_patch(
+    im,
+    ax,
+    *,
+    preserve_axes_limits: bool,
+    view_rotation_deg: float,
+    clip_path_custom: object,
+) -> None:
+    """Обрезка по прямоугольнику оси (patch), а не по data-bbox растра — без вылезания за карту и без лишних белых углов от неверного clip."""
+    if clip_path_custom is not None:
+        return
+    if preserve_axes_limits and abs(float(view_rotation_deg)) >= 1e-6:
+        im.set_clip_on(True)
+        im.set_clip_path(ax.patch)
+
+
+def _inflate_viewport_mercator(
+    viewport_xlim: tuple[float, float],
+    viewport_ylim: tuple[float, float],
+    *,
+    rel: float = 0.02,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Чуть расширяет окно осей для расчёта fetch (подпиксель, apply_aspect)."""
+    x0, x1 = sorted((float(viewport_xlim[0]), float(viewport_xlim[1])))
+    y0, y1 = sorted((float(viewport_ylim[0]), float(viewport_ylim[1])))
+    dx = max((x1 - x0) * float(rel), 1.0)
+    dy = max((y1 - y0) * float(rel), 1.0)
+    return (x0 - dx, x1 + dx), (y0 - dy, y1 + dy)
+
+
+def _mercator_fetch_covering_rotated_viewport(
+    viewport_xlim: tuple[float, float],
+    viewport_ylim: tuple[float, float],
+    cx: float,
+    cy: float,
+    view_rotation_deg: float,
+    basemap_offset_east_m: float = 0.0,
+    basemap_offset_north_m: float = 0.0,
+    *,
+    boundary_samples_per_edge: int = 64,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Минимальный ось-ориентированный охват в EPSG:3857 для растра до сдвига extent.
+
+    Растр задаётся ``extent = fetch_mercator + (ox, oy)``, затем тот же ``rotate`` вокруг (cx,cy),
+    что и у данных. Точка окна q видна на подложке, если ``R^{-1}(q)`` попадает в extent, т.е.
+    ``R^{-1}(q) - (ox, oy)`` в прямоугольнике fetch (без сдвига). Берём AABB по плотной сетке
+    на границе V, чтобы не оставались белые углы при повороте.
+    """
+    ox_m = float(basemap_offset_east_m)
+    oy_m = float(basemap_offset_north_m)
+    vx0, vx1 = sorted((float(viewport_xlim[0]), float(viewport_xlim[1])))
+    vy0, vy1 = sorted((float(viewport_ylim[0]), float(viewport_ylim[1])))
+    if abs(float(view_rotation_deg)) < 1e-9:
+        return (vx0 - ox_m, vx1 - ox_m), (vy0 - oy_m, vy1 - oy_m)
+
+    inv = (
+        Affine2D()
+        .translate(-float(cx), -float(cy))
+        .rotate_deg(-float(view_rotation_deg))
+        .translate(float(cx), float(cy))
+    )
+    n = max(4, int(boundary_samples_per_edge))
+    pts: list[tuple[float, float]] = []
+    for i in range(n):
+        t = i / max(n - 1, 1)
+        xb = vx0 + t * (vx1 - vx0)
+        yb = vy0 + t * (vy1 - vy0)
+        pts.append((xb, vy0))
+        pts.append((xb, vy1))
+        pts.append((vx0, yb))
+        pts.append((vx1, yb))
+    xs: list[float] = []
+    ys: list[float] = []
+    for x, y in pts:
+        u = inv.transform((x, y))
+        xs.append(float(u[0]) - ox_m)
+        ys.append(float(u[1]) - oy_m)
+    # Углы прямоугольника (на границе сетки уже есть; дубли не мешают min/max)
+    for x, y in ((vx0, vy0), (vx0, vy1), (vx1, vy0), (vx1, vy1)):
+        u = inv.transform((x, y))
+        xs.append(float(u[0]) - ox_m)
+        ys.append(float(u[1]) - oy_m)
+    return (min(xs), max(xs)), (min(ys), max(ys))
+
+
+def _expand_fetch_for_preserve_rotated_viewport(
+    fetch_xlim: tuple[float, float],
+    fetch_ylim: tuple[float, float],
+    inner_xlim: tuple[float, float],
+    inner_ylim: tuple[float, float],
+    saved_xlim: tuple[float, float],
+    saved_ylim: tuple[float, float],
+    view_rotation_deg: float,
+    basemap_offset_east_m: float = 0.0,
+    basemap_offset_north_m: float = 0.0,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Объединяет охват загрузки с AABB(R⁻¹(V)), чтобы повёрнутый растр заполнил углы окна V."""
+    cx = 0.5 * (float(inner_xlim[0]) + float(inner_xlim[1]))
+    cy = 0.5 * (float(inner_ylim[0]) + float(inner_ylim[1]))
+    vx_infl, vy_infl = _inflate_viewport_mercator(saved_xlim, saved_ylim, rel=0.055)
+    cover = _mercator_fetch_covering_rotated_viewport(
+        vx_infl,
+        vy_infl,
+        cx,
+        cy,
+        view_rotation_deg,
+        basemap_offset_east_m=basemap_offset_east_m,
+        basemap_offset_north_m=basemap_offset_north_m,
+        boundary_samples_per_edge=128,
+    )
+    # Доп. запас по диагонали окна: при ~45° углы требуют большего прообраза, чем по краям сетки.
+    x0, x1 = sorted((float(saved_xlim[0]), float(saved_xlim[1])))
+    y0, y1 = sorted((float(saved_ylim[0]), float(saved_ylim[1])))
+    diag = math.hypot(max(x1 - x0, 1e-9), max(y1 - y0, 1e-9))
+    rad = math.radians(abs(float(view_rotation_deg)))
+    diag_pad = 0.018 * diag * max(0.0, math.sin(rad)) * max(0.0, math.cos(rad)) * 2.0
+    rel_pad = 0.14 + 0.12 * (2.0 * abs(math.sin(rad)) * abs(math.cos(rad)))
+    min_pad_m = max(48.0, float(diag_pad))
+    cover = _inflate_mercator_fetch_extent(
+        cover[0], cover[1], rel_pad=rel_pad, min_pad_m=min_pad_m
+    )
+    return _merge_mercator_fetch_extents((fetch_xlim, fetch_ylim), cover)
 
 
 def _inflate_mercator_fetch_extent(
@@ -374,12 +528,12 @@ def _warp_static_rgba_lonlat_linear_to_mercator_extent(
     nch = img.shape[2]
     out = np.empty((nh, nw, nch), dtype=np.float32)
     for c in range(nch):
+        # nearest: при лёгком выходе u,v за кадр API не заливаем 0 (на белом фоне — «дыры» в углах).
         out[..., c] = map_coordinates(
             np.asarray(img[..., c], dtype=np.float64),
             [v, u],
             order=1,
-            mode="constant",
-            cval=0.0,
+            mode="nearest",
         ).astype(np.float32)
     return np.clip(out, 0.0, 1.0)
 
@@ -455,9 +609,16 @@ def add_google_hybrid_static_basemap(
     if preserve_axes_limits:
         saved_xlim = ax.get_xlim()
         saved_ylim = ax.get_ylim()
-        fetch_xlim, fetch_ylim = _merge_mercator_fetch_extents(
-            (fetch_xlim, fetch_ylim),
-            (saved_xlim, saved_ylim),
+        fetch_xlim, fetch_ylim = _expand_fetch_for_preserve_rotated_viewport(
+            fetch_xlim,
+            fetch_ylim,
+            inner_xlim,
+            inner_ylim,
+            saved_xlim,
+            saved_ylim,
+            view_rotation_deg,
+            basemap_offset_east_m=basemap_offset_east_m,
+            basemap_offset_north_m=basemap_offset_north_m,
         )
     else:
         ax.set_xlim(*view_xlim)
@@ -505,18 +666,23 @@ def add_google_hybrid_static_basemap(
         basemap_offset_east_m,
         basemap_offset_north_m,
     )
-    im_aspect = "equal" if preserve_axes_limits else "auto"
-    im = ax.imshow(
+    im = _add_rgba_basemap_axes_image(
+        ax,
         img,
         extent=ext,
-        origin="upper",
-        zorder=zorder,
-        aspect=im_aspect,
         transform=tfm,
+        zorder=zorder,
     )
     if clip_path is not None:
         ct = clip_transform if clip_transform is not None else tfm
         im.set_clip_path(clip_path, transform=ct)
+    _apply_rotated_basemap_clip_to_axes_patch(
+        im,
+        ax,
+        preserve_axes_limits=preserve_axes_limits,
+        view_rotation_deg=view_rotation_deg,
+        clip_path_custom=clip_path,
+    )
     if preserve_axes_limits and saved_xlim is not None and saved_ylim is not None:
         # Только пределы: повторный set_aspect("equal") с adjustable='datalim' снова вызывает
         # подгонку и сдвигает окно относительно уже привязанного к EPSG:3857 растра/данных.
@@ -603,9 +769,16 @@ def add_yandex_static_basemap(
     if preserve_axes_limits:
         saved_xlim = ax.get_xlim()
         saved_ylim = ax.get_ylim()
-        fetch_xlim, fetch_ylim = _merge_mercator_fetch_extents(
-            (fetch_xlim, fetch_ylim),
-            (saved_xlim, saved_ylim),
+        fetch_xlim, fetch_ylim = _expand_fetch_for_preserve_rotated_viewport(
+            fetch_xlim,
+            fetch_ylim,
+            inner_xlim,
+            inner_ylim,
+            saved_xlim,
+            saved_ylim,
+            view_rotation_deg,
+            basemap_offset_east_m=basemap_offset_east_m,
+            basemap_offset_north_m=basemap_offset_north_m,
         )
     else:
         ax.set_xlim(*view_xlim)
@@ -646,20 +819,23 @@ def add_yandex_static_basemap(
         basemap_offset_east_m,
         basemap_offset_north_m,
     )
-    # aspect="auto" вызывает ax.set_aspect("auto") и ломает 1:1 м в EPSG:3857.
-    # При aspect=None matplotlib всё равно подставляет rc image.aspect — явно «equal».
-    im_aspect = "equal" if preserve_axes_limits else "auto"
-    im = ax.imshow(
+    im = _add_rgba_basemap_axes_image(
+        ax,
         img,
         extent=ext,
-        origin="upper",
-        zorder=zorder,
-        aspect=im_aspect,
         transform=tfm,
+        zorder=zorder,
     )
     if clip_path is not None:
         ct = clip_transform if clip_transform is not None else tfm
         im.set_clip_path(clip_path, transform=ct)
+    _apply_rotated_basemap_clip_to_axes_patch(
+        im,
+        ax,
+        preserve_axes_limits=preserve_axes_limits,
+        view_rotation_deg=view_rotation_deg,
+        clip_path_custom=clip_path,
+    )
     if preserve_axes_limits and saved_xlim is not None and saved_ylim is not None:
         # Только пределы: не вызывать set_aspect("equal") — с adjustable='datalim' снова двигает окно.
         ax.set_xlim(*saved_xlim)
@@ -789,9 +965,16 @@ def add_satellite_basemap(
     if preserve_axes_limits:
         saved_xlim = ax.get_xlim()
         saved_ylim = ax.get_ylim()
-        fetch_xlim, fetch_ylim = _merge_mercator_fetch_extents(
-            (fetch_xlim, fetch_ylim),
-            (saved_xlim, saved_ylim),
+        fetch_xlim, fetch_ylim = _expand_fetch_for_preserve_rotated_viewport(
+            fetch_xlim,
+            fetch_ylim,
+            inner_xlim,
+            inner_ylim,
+            saved_xlim,
+            saved_ylim,
+            view_rotation_deg,
+            basemap_offset_east_m=basemap_offset_east_m,
+            basemap_offset_north_m=basemap_offset_north_m,
         )
 
     ax.set_xlim(*fetch_xlim)
@@ -833,6 +1016,22 @@ def add_satellite_basemap(
                 im.set_transform(display_transform)
             if clip_path is not None:
                 im.set_clip_path(clip_path, transform=ct)
+            _apply_rotated_basemap_clip_to_axes_patch(
+                im,
+                ax,
+                preserve_axes_limits=preserve_axes_limits,
+                view_rotation_deg=view_rotation_deg,
+                clip_path_custom=clip_path,
+            )
+    elif preserve_axes_limits and abs(float(view_rotation_deg)) >= 1e-6 and clip_path is None:
+        for im in ax.images:
+            _apply_rotated_basemap_clip_to_axes_patch(
+                im,
+                ax,
+                preserve_axes_limits=True,
+                view_rotation_deg=view_rotation_deg,
+                clip_path_custom=None,
+            )
 
     ox, oy = float(basemap_offset_east_m), float(basemap_offset_north_m)
     if ox != 0.0 or oy != 0.0:

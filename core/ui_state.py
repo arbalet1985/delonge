@@ -70,6 +70,7 @@ def default_ui_state_dict() -> dict[str, Any]:
         "enforce_mirror": True,
         "horizontal_align_vertical": False,
         "tabs_index": 0,
+        "settings_panel_width_px": 380,
         "settings_panel_expanded": True,
         "last_excel_path": None,
         "column_selections": {"rn": "", "x": "", "y": "", "ap": "", "ac": ""},

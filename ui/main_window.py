@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSlider,
     QSpinBox,
+    QSplitter,
     QTabWidget,
     QToolButton,
     QVBoxLayout,
@@ -70,10 +71,20 @@ class MainWindow(QMainWindow):
         controls_scroll = QScrollArea()
         controls_scroll.setWidgetResizable(True)
         controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        controls_scroll.setMinimumWidth(360)
+        controls_scroll.setMinimumWidth(220)
         controls_scroll.setWidget(self._build_controls_panel())
-        root_layout.addWidget(controls_scroll, 0)
-        root_layout.addWidget(self._build_charts_panel(), 1)
+
+        charts_panel = self._build_charts_panel()
+        self._main_splitter = QSplitter(Qt.Horizontal)
+        self._main_splitter.setObjectName("mainSplitter")
+        self._main_splitter.setChildrenCollapsible(False)
+        self._main_splitter.addWidget(controls_scroll)
+        self._main_splitter.addWidget(charts_panel)
+        self._main_splitter.setStretchFactor(0, 0)
+        self._main_splitter.setStretchFactor(1, 1)
+        self._main_splitter.setSizes([380, 980])
+
+        root_layout.addWidget(self._main_splitter, 1)
 
         self.setCentralWidget(central)
         self._loading_ui_config = False
@@ -128,15 +139,17 @@ class MainWindow(QMainWindow):
         form = QFormLayout(map_group)
         for key, label in [("rn", "rn"), ("x", "x"), ("y", "y"), ("ap", "Ap"), ("ac", "Ac")]:
             combo = QComboBox()
-            combo.setMinimumWidth(220)
+            combo.setMinimumWidth(160)
             combo.currentIndexChanged.connect(self._update_basemap_availability)
             self.column_combos[key] = combo
             form.addRow(f"{label}:", combo)
         layout.addWidget(map_group)
 
-        settings = QGroupBox("Параметры")
-        settings_layout = QGridLayout(settings)
-        self.settings_group = settings
+        settings_wrap = QWidget()
+        settings_layout = QVBoxLayout(settings_wrap)
+        settings_layout.setSpacing(8)
+        settings_layout.setContentsMargins(0, 0, 0, 0)
+        self.settings_group = settings_wrap
 
         self.levels_spin = QSpinBox()
         self.levels_spin.setRange(5, 40)
@@ -162,11 +175,11 @@ class MainWindow(QMainWindow):
         self.axis_tick_font_x_spin = QSpinBox()
         self.axis_tick_font_x_spin.setRange(5, 18)
         self.axis_tick_font_x_spin.setValue(9)
-        self.axis_tick_font_x_spin.setToolTip("Размер шрифта подписей делений по оси X (градусы/метры).")
+        self.axis_tick_font_x_spin.setToolTip("Размер шрифта делений по оси X (градусы/метры).")
         self.axis_tick_font_y_spin = QSpinBox()
         self.axis_tick_font_y_spin.setRange(5, 18)
         self.axis_tick_font_y_spin.setValue(9)
-        self.axis_tick_font_y_spin.setToolTip("Размер шрифта подписей делений по оси Y.")
+        self.axis_tick_font_y_spin.setToolTip("Размер шрифта делений по оси Y.")
 
         self.axis_margin_spin = QSpinBox()
         self.axis_margin_spin.setRange(0, 20)
@@ -345,101 +358,6 @@ class MainWindow(QMainWindow):
         self.smooth_contours_checkbox = QCheckBox("Плавные изолинии")
         self.smooth_contours_checkbox.setChecked(True)
 
-        settings_layout.addWidget(QLabel("Уровни изолиний:"), 0, 0)
-        settings_layout.addWidget(self.levels_spin, 0, 1)
-        settings_layout.addWidget(self.use_levels_step_checkbox, 0, 2)
-        settings_layout.addWidget(self.levels_step_spin, 1, 2)
-        settings_layout.addWidget(QLabel("Размер точек:"), 1, 0)
-        settings_layout.addWidget(self.point_size_spin, 1, 1)
-        settings_layout.addWidget(QLabel("Шрифт подписей (rn/коорд.):"), 2, 0)
-        settings_layout.addWidget(self.annotation_font_spin, 2, 1)
-        settings_layout.addWidget(QLabel("Деления осей X / Y (пт):"), 3, 0)
-        axis_tick_row = QWidget()
-        axis_tick_row_layout = QHBoxLayout(axis_tick_row)
-        axis_tick_row_layout.setContentsMargins(0, 0, 0, 0)
-        axis_tick_row_layout.setSpacing(8)
-        axis_tick_row_layout.addWidget(QLabel("X"))
-        axis_tick_row_layout.addWidget(self.axis_tick_font_x_spin)
-        axis_tick_row_layout.addWidget(QLabel("Y"))
-        axis_tick_row_layout.addWidget(self.axis_tick_font_y_spin)
-        settings_layout.addWidget(axis_tick_row, 3, 1, 1, 2)
-        settings_layout.addWidget(QLabel("Поворот карты (°):"), 4, 0)
-        settings_layout.addWidget(self.map_view_rotation_spin, 4, 1)
-        settings_layout.addWidget(QLabel("Отступ от рамки карты:"), 5, 0)
-        settings_layout.addWidget(self.axis_margin_spin, 5, 1)
-        settings_layout.addWidget(self.mercator_square_extent_checkbox, 6, 0, 1, 3)
-        mercator_span_row = QWidget()
-        mercator_span_row_layout = QHBoxLayout(mercator_span_row)
-        mercator_span_row_layout.setContentsMargins(0, 0, 0, 0)
-        mercator_span_row_layout.setSpacing(8)
-        mercator_span_row_layout.addWidget(QLabel("X"))
-        mercator_span_row_layout.addWidget(self.mercator_span_x_spin)
-        mercator_span_row_layout.addWidget(QLabel("Y"))
-        mercator_span_row_layout.addWidget(self.mercator_span_y_spin)
-        map_extent_zoom_row = QWidget()
-        map_extent_zoom_row_layout = QHBoxLayout(map_extent_zoom_row)
-        map_extent_zoom_row_layout.setContentsMargins(0, 0, 0, 0)
-        map_extent_zoom_row_layout.setSpacing(8)
-        map_extent_zoom_row_layout.addWidget(QLabel("Общий"))
-        map_extent_zoom_row_layout.addWidget(self.map_extent_zoom_spin)
-        mercator_extent_col = QWidget()
-        mercator_extent_col_layout = QVBoxLayout(mercator_extent_col)
-        mercator_extent_col_layout.setContentsMargins(0, 0, 0, 0)
-        mercator_extent_col_layout.setSpacing(4)
-        mercator_extent_col_layout.addWidget(map_extent_zoom_row)
-        mercator_extent_col_layout.addWidget(mercator_span_row)
-        settings_layout.addWidget(QLabel("Масштаб осей карты (Mercator):"), 7, 0)
-        settings_layout.addWidget(mercator_extent_col, 7, 1, 1, 2)
-        dual_fig_size_row = QWidget()
-        dual_fig_size_layout = QHBoxLayout(dual_fig_size_row)
-        dual_fig_size_layout.setContentsMargins(0, 0, 0, 0)
-        dual_fig_size_layout.setSpacing(8)
-        dual_fig_size_layout.addWidget(QLabel("Шир."))
-        dual_fig_size_layout.addWidget(self.dual_canvas_width_spin)
-        dual_fig_size_layout.addWidget(QLabel("Выс."))
-        dual_fig_size_layout.addWidget(self.dual_canvas_height_spin)
-        overlay_fig_size_row = QWidget()
-        overlay_fig_size_layout = QHBoxLayout(overlay_fig_size_row)
-        overlay_fig_size_layout.setContentsMargins(0, 0, 0, 0)
-        overlay_fig_size_layout.setSpacing(8)
-        overlay_fig_size_layout.addWidget(QLabel("Шир."))
-        overlay_fig_size_layout.addWidget(self.overlay_canvas_width_spin)
-        overlay_fig_size_layout.addWidget(QLabel("Выс."))
-        overlay_fig_size_layout.addWidget(self.overlay_canvas_height_spin)
-        settings_layout.addWidget(QLabel("Размер области «Отдельные карты»:"), 8, 0)
-        settings_layout.addWidget(dual_fig_size_row, 8, 1, 1, 2)
-        settings_layout.addWidget(QLabel("Размер области «Overlay»:"), 9, 0)
-        settings_layout.addWidget(overlay_fig_size_row, 9, 1, 1, 2)
-        settings_layout.addWidget(QLabel("Сглаживание:"), 10, 0)
-        settings_layout.addWidget(self.smoothing_spin, 10, 1)
-        settings_layout.addWidget(self.basemap_checkbox, 11, 0, 1, 3)
-        settings_layout.addWidget(QLabel("Источник подложки:"), 12, 0)
-        settings_layout.addWidget(self.basemap_source_combo, 12, 1, 1, 2)
-        settings_layout.addWidget(QLabel("Сдвиг подложки E / N (м):"), 13, 0)
-        basemap_off_row = QWidget()
-        basemap_off_row_layout = QHBoxLayout(basemap_off_row)
-        basemap_off_row_layout.setContentsMargins(0, 0, 0, 0)
-        basemap_off_row_layout.setSpacing(8)
-        basemap_off_row_layout.addWidget(QLabel("E"))
-        basemap_off_row_layout.addWidget(self.basemap_offset_e_spin)
-        basemap_off_row_layout.addWidget(QLabel("N"))
-        basemap_off_row_layout.addWidget(self.basemap_offset_n_spin)
-        settings_layout.addWidget(basemap_off_row, 13, 1, 1, 2)
-        settings_layout.addWidget(QLabel("Прозрачность слоя над подложкой:"), 14, 0)
-        settings_layout.addWidget(self.map_opacity_slider, 14, 1)
-        settings_layout.addWidget(self.map_opacity_label, 14, 2)
-        settings_layout.addWidget(QLabel("Прозрачность overlay:"), 15, 0)
-        settings_layout.addWidget(self.alpha_slider, 15, 1)
-        settings_layout.addWidget(self.alpha_label, 15, 2)
-        settings_layout.addWidget(QLabel("Градиент:"), 16, 0)
-        cmap_row = QWidget()
-        cmap_row_layout = QHBoxLayout(cmap_row)
-        cmap_row_layout.setContentsMargins(0, 0, 0, 0)
-        cmap_row_layout.setSpacing(8)
-        cmap_row_layout.addWidget(self.cmap_start_btn)
-        cmap_row_layout.addWidget(self.cmap_end_btn)
-        settings_layout.addWidget(cmap_row, 16, 1, 1, 2)
-
         self.use_custom_gradient_checkbox = QCheckBox("Свои цвета по градациям")
         self.use_custom_gradient_checkbox.setChecked(False)
         self.use_custom_gradient_checkbox.setToolTip(
@@ -450,7 +368,7 @@ class MainWindow(QMainWindow):
         self.gradient_steps_spin.setRange(2, 30)
         self.gradient_steps_spin.setValue(8)
         self.gradient_steps_spin.setToolTip("Сколько цветовых градаций (полос) на карте.")
-        self._gradient_color_buttons_per_row = 8
+        self._gradient_color_buttons_per_row = 4
         self.gradient_colors_widget = QWidget()
         self.gradient_colors_layout = QGridLayout(self.gradient_colors_widget)
         self.gradient_colors_layout.setContentsMargins(0, 0, 0, 0)
@@ -476,34 +394,190 @@ class MainWindow(QMainWindow):
         self.gradient_blend_btn.clicked.connect(self._blend_gradient_colors_uniform)
         grad_row_layout.addWidget(self.gradient_blend_btn)
         grad_row_layout.addStretch(1)
-        settings_layout.addWidget(grad_row, 17, 0, 1, 3)
-        settings_layout.addWidget(QLabel("Цвета градаций:"), 18, 0)
-        settings_layout.addWidget(self.gradient_colors_widget, 18, 1, 1, 2)
         self.use_custom_gradient_checkbox.toggled.connect(self._on_custom_gradient_toggled)
 
-        settings_layout.addWidget(self.smooth_contours_checkbox, 19, 0, 1, 3)
-        settings_layout.addWidget(self.show_points_checkbox, 20, 0, 1, 3)
-        settings_layout.addWidget(self.show_coordinates_checkbox, 21, 0, 1, 3)
-        settings_layout.addWidget(self.show_rn_checkbox, 22, 0, 1, 3)
         self.show_coordinate_grid_checkbox = QCheckBox("Координатная сетка")
         self.show_coordinate_grid_checkbox.setChecked(True)
-        settings_layout.addWidget(self.show_coordinate_grid_checkbox, 23, 0, 1, 3)
         self.show_scale_bar_x_checkbox = QCheckBox("Шкала масштаба по X (горизонтально на экране)")
         self.show_scale_bar_x_checkbox.setChecked(True)
         self.show_scale_bar_y_checkbox = QCheckBox("Шкала масштаба по Y (вертикально на экране)")
         self.show_scale_bar_y_checkbox.setChecked(False)
-        settings_layout.addWidget(self.show_scale_bar_x_checkbox, 24, 0, 1, 3)
-        settings_layout.addWidget(self.show_scale_bar_y_checkbox, 25, 0, 1, 3)
-        settings_layout.addWidget(self.show_contour_lines_checkbox, 26, 0, 1, 3)
-        settings_layout.addWidget(self.show_contour_labels_checkbox, 27, 0, 1, 3)
-        settings_layout.addWidget(QLabel("Шрифт подписей изолиний:"), 28, 0)
-        settings_layout.addWidget(self.contour_label_font_spin, 28, 1)
-        settings_layout.addWidget(QLabel("Толщина изолиний:"), 29, 0)
-        settings_layout.addWidget(self.contour_line_width_spin, 29, 1)
-        settings_layout.addWidget(self.invert_x_checkbox, 30, 0, 1, 3)
-        settings_layout.addWidget(self.invert_y_checkbox, 31, 0, 1, 3)
-        settings_layout.addWidget(self.swap_xy_checkbox, 32, 0, 1, 3)
-        settings_layout.addWidget(self.enforce_mirror_checkbox, 33, 0, 1, 3)
+
+        levels_row = QWidget()
+        levels_row_layout = QHBoxLayout(levels_row)
+        levels_row_layout.setContentsMargins(0, 0, 0, 0)
+        levels_row_layout.setSpacing(6)
+        levels_row_layout.addWidget(self.levels_spin)
+        levels_row_layout.addWidget(self.use_levels_step_checkbox)
+        levels_row_layout.addWidget(self.levels_step_spin)
+        levels_row_layout.addStretch(1)
+
+        axis_tick_row = QWidget()
+        axis_tick_row_layout = QHBoxLayout(axis_tick_row)
+        axis_tick_row_layout.setContentsMargins(0, 0, 0, 0)
+        axis_tick_row_layout.setSpacing(6)
+        axis_tick_row_layout.addWidget(QLabel("X"))
+        axis_tick_row_layout.addWidget(self.axis_tick_font_x_spin)
+        axis_tick_row_layout.addWidget(QLabel("Y"))
+        axis_tick_row_layout.addWidget(self.axis_tick_font_y_spin)
+        axis_tick_row_layout.addStretch(1)
+
+        mercator_span_row = QWidget()
+        mercator_span_row_layout = QHBoxLayout(mercator_span_row)
+        mercator_span_row_layout.setContentsMargins(0, 0, 0, 0)
+        mercator_span_row_layout.setSpacing(6)
+        mercator_span_row_layout.addWidget(QLabel("X"))
+        mercator_span_row_layout.addWidget(self.mercator_span_x_spin)
+        mercator_span_row_layout.addWidget(QLabel("Y"))
+        mercator_span_row_layout.addWidget(self.mercator_span_y_spin)
+        mercator_span_row_layout.addStretch(1)
+
+        map_extent_zoom_row = QWidget()
+        map_extent_zoom_row_layout = QHBoxLayout(map_extent_zoom_row)
+        map_extent_zoom_row_layout.setContentsMargins(0, 0, 0, 0)
+        map_extent_zoom_row_layout.setSpacing(6)
+        map_extent_zoom_row_layout.addWidget(QLabel("Общий"))
+        map_extent_zoom_row_layout.addWidget(self.map_extent_zoom_spin)
+        map_extent_zoom_row_layout.addStretch(1)
+
+        mercator_extent_col = QWidget()
+        mercator_extent_col_layout = QVBoxLayout(mercator_extent_col)
+        mercator_extent_col_layout.setContentsMargins(0, 0, 0, 0)
+        mercator_extent_col_layout.setSpacing(4)
+        mercator_extent_col_layout.addWidget(map_extent_zoom_row)
+        mercator_extent_col_layout.addWidget(mercator_span_row)
+
+        dual_fig_size_row = QWidget()
+        dual_fig_size_layout = QHBoxLayout(dual_fig_size_row)
+        dual_fig_size_layout.setContentsMargins(0, 0, 0, 0)
+        dual_fig_size_layout.setSpacing(6)
+        dual_fig_size_layout.addWidget(QLabel("Шир."))
+        dual_fig_size_layout.addWidget(self.dual_canvas_width_spin)
+        dual_fig_size_layout.addWidget(QLabel("Выс."))
+        dual_fig_size_layout.addWidget(self.dual_canvas_height_spin)
+
+        overlay_fig_size_row = QWidget()
+        overlay_fig_size_layout = QHBoxLayout(overlay_fig_size_row)
+        overlay_fig_size_layout.setContentsMargins(0, 0, 0, 0)
+        overlay_fig_size_layout.setSpacing(6)
+        overlay_fig_size_layout.addWidget(QLabel("Шир."))
+        overlay_fig_size_layout.addWidget(self.overlay_canvas_width_spin)
+        overlay_fig_size_layout.addWidget(QLabel("Выс."))
+        overlay_fig_size_layout.addWidget(self.overlay_canvas_height_spin)
+
+        basemap_off_row = QWidget()
+        basemap_off_row_layout = QHBoxLayout(basemap_off_row)
+        basemap_off_row_layout.setContentsMargins(0, 0, 0, 0)
+        basemap_off_row_layout.setSpacing(6)
+        basemap_off_row_layout.addWidget(QLabel("E"))
+        basemap_off_row_layout.addWidget(self.basemap_offset_e_spin)
+        basemap_off_row_layout.addWidget(QLabel("N"))
+        basemap_off_row_layout.addWidget(self.basemap_offset_n_spin)
+        basemap_off_row_layout.addStretch(1)
+
+        cmap_row = QWidget()
+        cmap_row_layout = QHBoxLayout(cmap_row)
+        cmap_row_layout.setContentsMargins(0, 0, 0, 0)
+        cmap_row_layout.setSpacing(6)
+        cmap_row_layout.addWidget(self.cmap_start_btn)
+        cmap_row_layout.addWidget(self.cmap_end_btn)
+        cmap_row_layout.addStretch(1)
+
+        map_opacity_row = QWidget()
+        map_opacity_row_layout = QHBoxLayout(map_opacity_row)
+        map_opacity_row_layout.setContentsMargins(0, 0, 0, 0)
+        map_opacity_row_layout.setSpacing(6)
+        map_opacity_row_layout.addWidget(self.map_opacity_slider, 1)
+        map_opacity_row_layout.addWidget(self.map_opacity_label)
+
+        alpha_row = QWidget()
+        alpha_row_layout = QHBoxLayout(alpha_row)
+        alpha_row_layout.setContentsMargins(0, 0, 0, 0)
+        alpha_row_layout.setSpacing(6)
+        alpha_row_layout.addWidget(self.alpha_slider, 1)
+        alpha_row_layout.addWidget(self.alpha_label)
+
+        self.basemap_source_combo.setMinimumWidth(120)
+
+        def _compact_form(g: QGroupBox) -> QFormLayout:
+            fl = QFormLayout(g)
+            fl.setSpacing(6)
+            fl.setContentsMargins(8, 10, 8, 8)
+            fl.setHorizontalSpacing(6)
+            fl.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+            return fl
+
+        g_iso = QGroupBox("Изолинии")
+        fl_iso = _compact_form(g_iso)
+        fl_iso.addRow("Число уровней:", levels_row)
+        fl_iso.addRow("Сглаживание:", self.smoothing_spin)
+        fl_iso.addRow(self.smooth_contours_checkbox)
+        settings_layout.addWidget(g_iso)
+
+        g_view = QGroupBox("Охват и размер")
+        fl_v = _compact_form(g_view)
+        fl_v.addRow("Поворот:", self.map_view_rotation_spin)
+        fl_v.addRow("Отступ рамки:", self.axis_margin_spin)
+        fl_v.addRow(self.mercator_square_extent_checkbox)
+        fl_v.addRow("Mercator:", mercator_extent_col)
+        fl_v.addRow("«Отдельные карты»:", dual_fig_size_row)
+        fl_v.addRow("«Overlay»:", overlay_fig_size_row)
+        settings_layout.addWidget(g_view)
+
+        g_bm = QGroupBox("Подложка")
+        fl_bm = _compact_form(g_bm)
+        fl_bm.addRow(self.basemap_checkbox)
+        fl_bm.addRow("Источник:", self.basemap_source_combo)
+        fl_bm.addRow("Сдвиг:", basemap_off_row)
+        fl_bm.addRow("Слой / подложка:", map_opacity_row)
+        fl_bm.addRow("Overlay Ap/Ac:", alpha_row)
+        settings_layout.addWidget(g_bm)
+
+        g_col = QGroupBox("Цвет")
+        fl_c = _compact_form(g_col)
+        fl_c.addRow("Градиент:", cmap_row)
+        fl_c.addRow(grad_row)
+        fl_c.addRow("Плитки:", self.gradient_colors_widget)
+        settings_layout.addWidget(g_col)
+
+        g_font = QGroupBox("Шрифты")
+        fl_f = _compact_form(g_font)
+        fl_f.addRow("Точки:", self.point_size_spin)
+        fl_f.addRow("Подписи точек:", self.annotation_font_spin)
+        fl_f.addRow("Шрифт по осям:", axis_tick_row)
+        fl_f.addRow("Подписи изолиний:", self.contour_label_font_spin)
+        fl_f.addRow("Толщина линий:", self.contour_line_width_spin)
+        settings_layout.addWidget(g_font)
+
+        g_disp = QGroupBox("Что показывать")
+        vl_disp = QVBoxLayout(g_disp)
+        vl_disp.setSpacing(4)
+        vl_disp.setContentsMargins(8, 10, 8, 8)
+        for w in (
+            self.show_points_checkbox,
+            self.show_coordinates_checkbox,
+            self.show_rn_checkbox,
+            self.show_coordinate_grid_checkbox,
+            self.show_scale_bar_x_checkbox,
+            self.show_scale_bar_y_checkbox,
+            self.show_contour_lines_checkbox,
+            self.show_contour_labels_checkbox,
+        ):
+            vl_disp.addWidget(w)
+        settings_layout.addWidget(g_disp)
+
+        g_axes = QGroupBox("Оси и данные")
+        vl_ax = QVBoxLayout(g_axes)
+        vl_ax.setSpacing(4)
+        vl_ax.setContentsMargins(8, 10, 8, 8)
+        for w in (
+            self.invert_x_checkbox,
+            self.invert_y_checkbox,
+            self.swap_xy_checkbox,
+            self.enforce_mirror_checkbox,
+        ):
+            vl_ax.addWidget(w)
+        settings_layout.addWidget(g_axes)
 
         self.toggle_settings_btn = QToolButton()
         self.toggle_settings_btn.setText("Свернуть параметры")
@@ -512,7 +586,7 @@ class MainWindow(QMainWindow):
         self.toggle_settings_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self.toggle_settings_btn.toggled.connect(self._toggle_settings_visibility)
         layout.addWidget(self.toggle_settings_btn)
-        layout.addWidget(settings)
+        layout.addWidget(settings_wrap)
 
         actions = QGroupBox("Действия")
         actions_layout = QVBoxLayout(actions)
@@ -757,6 +831,9 @@ class MainWindow(QMainWindow):
             "enforce_mirror": self.enforce_mirror_checkbox.isChecked(),
             "horizontal_align_vertical": self.horizontal_align_btn.isChecked(),
             "tabs_index": self.tabs.currentIndex(),
+            "settings_panel_width_px": int(self._main_splitter.sizes()[0])
+            if getattr(self, "_main_splitter", None) is not None
+            else 380,
             "settings_panel_expanded": self.toggle_settings_btn.isChecked(),
             "last_excel_path": self.file_path,
             "column_selections": {k: self.column_combos[k].currentText() for k in self.column_combos},
@@ -867,6 +944,20 @@ class MainWindow(QMainWindow):
             self._update_basemap_availability()
         finally:
             self._loading_ui_config = False
+        sw = int(d.get("settings_panel_width_px", default_ui_state_dict()["settings_panel_width_px"]))
+        QTimer.singleShot(0, lambda: self._apply_settings_panel_splitter_width(sw))
+
+    def _apply_settings_panel_splitter_width(self, target_left: int) -> None:
+        """Восстанавливает ширину левой колонки после загрузки конфига (когда splitter уже имеет размер)."""
+        sp = getattr(self, "_main_splitter", None)
+        if sp is None:
+            return
+        total = sp.width()
+        if total <= 0:
+            QTimer.singleShot(50, lambda t=target_left: self._apply_settings_panel_splitter_width(t))
+            return
+        left = max(220, min(int(target_left), total - 250))
+        sp.setSizes([left, total - left])
 
     def _restore_excel_session_from_state(self, d: dict) -> None:
         path = d.get("last_excel_path")
