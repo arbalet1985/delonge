@@ -429,6 +429,7 @@ def add_google_hybrid_static_basemap(
     mercator_span_scale_y: float = 1.0,
     basemap_offset_east_m: float = 0.0,
     basemap_offset_north_m: float = 0.0,
+    preserve_axes_limits: bool = False,
 ) -> None:
     """Hybrid (satellite + labels) via official Static Maps API; axes in EPSG:3857."""
     inner_xlim, inner_ylim = compute_mercator_axis_extent(
@@ -446,10 +447,22 @@ def add_google_hybrid_static_basemap(
         basemap_offset_east_m,
         basemap_offset_north_m,
     )
+    view_xlim, view_ylim = expand_mercator_extent_for_view_rotation(
+        inner_xlim, inner_ylim, view_rotation_deg
+    )
 
-    ax.set_xlim(*inner_xlim)
-    ax.set_ylim(*inner_ylim)
-    ax.set_aspect("auto")
+    saved_xlim = saved_ylim = None
+    if preserve_axes_limits:
+        saved_xlim = ax.get_xlim()
+        saved_ylim = ax.get_ylim()
+        fetch_xlim, fetch_ylim = _merge_mercator_fetch_extents(
+            (fetch_xlim, fetch_ylim),
+            (saved_xlim, saved_ylim),
+        )
+    else:
+        ax.set_xlim(*view_xlim)
+        ax.set_ylim(*view_ylim)
+        ax.set_aspect("auto")
 
     corners_e_n = [
         (fetch_xlim[0], fetch_ylim[0]),
@@ -492,20 +505,27 @@ def add_google_hybrid_static_basemap(
         basemap_offset_east_m,
         basemap_offset_north_m,
     )
+    im_aspect = "equal" if preserve_axes_limits else "auto"
     im = ax.imshow(
         img,
         extent=ext,
         origin="upper",
         zorder=zorder,
-        aspect="auto",
+        aspect=im_aspect,
         transform=tfm,
     )
     if clip_path is not None:
         ct = clip_transform if clip_transform is not None else tfm
         im.set_clip_path(clip_path, transform=ct)
-    ax.set_xlim(*inner_xlim)
-    ax.set_ylim(*inner_ylim)
-    ax.set_aspect("auto")
+    if preserve_axes_limits and saved_xlim is not None and saved_ylim is not None:
+        # Только пределы: повторный set_aspect("equal") с adjustable='datalim' снова вызывает
+        # подгонку и сдвигает окно относительно уже привязанного к EPSG:3857 растра/данных.
+        ax.set_xlim(*saved_xlim)
+        ax.set_ylim(*saved_ylim)
+    else:
+        ax.set_xlim(*view_xlim)
+        ax.set_ylim(*view_ylim)
+        ax.set_aspect("auto")
 
 
 def _fetch_yandex_static_png(
@@ -557,6 +577,7 @@ def add_yandex_static_basemap(
     mercator_span_scale_y: float = 1.0,
     basemap_offset_east_m: float = 0.0,
     basemap_offset_north_m: float = 0.0,
+    preserve_axes_limits: bool = False,
 ) -> None:
     """Подложка через Yandex Static API (схема ``map`` или гибрид ``sat,skl``), оси EPSG:3857."""
     inner_xlim, inner_ylim = compute_mercator_axis_extent(
@@ -574,10 +595,22 @@ def add_yandex_static_basemap(
         basemap_offset_east_m,
         basemap_offset_north_m,
     )
+    view_xlim, view_ylim = expand_mercator_extent_for_view_rotation(
+        inner_xlim, inner_ylim, view_rotation_deg
+    )
 
-    ax.set_xlim(*inner_xlim)
-    ax.set_ylim(*inner_ylim)
-    ax.set_aspect("auto")
+    saved_xlim = saved_ylim = None
+    if preserve_axes_limits:
+        saved_xlim = ax.get_xlim()
+        saved_ylim = ax.get_ylim()
+        fetch_xlim, fetch_ylim = _merge_mercator_fetch_extents(
+            (fetch_xlim, fetch_ylim),
+            (saved_xlim, saved_ylim),
+        )
+    else:
+        ax.set_xlim(*view_xlim)
+        ax.set_ylim(*view_ylim)
+        ax.set_aspect("auto")
 
     lon_min, lon_max, lat_min, lat_max = _lon_lat_bbox_from_mercator_square(fetch_xlim, fetch_ylim)
     lon_span = max(lon_max - lon_min, 1e-5)
@@ -613,20 +646,28 @@ def add_yandex_static_basemap(
         basemap_offset_east_m,
         basemap_offset_north_m,
     )
+    # aspect="auto" вызывает ax.set_aspect("auto") и ломает 1:1 м в EPSG:3857.
+    # При aspect=None matplotlib всё равно подставляет rc image.aspect — явно «equal».
+    im_aspect = "equal" if preserve_axes_limits else "auto"
     im = ax.imshow(
         img,
         extent=ext,
         origin="upper",
         zorder=zorder,
-        aspect="auto",
+        aspect=im_aspect,
         transform=tfm,
     )
     if clip_path is not None:
         ct = clip_transform if clip_transform is not None else tfm
         im.set_clip_path(clip_path, transform=ct)
-    ax.set_xlim(*inner_xlim)
-    ax.set_ylim(*inner_ylim)
-    ax.set_aspect("auto")
+    if preserve_axes_limits and saved_xlim is not None and saved_ylim is not None:
+        # Только пределы: не вызывать set_aspect("equal") — с adjustable='datalim' снова двигает окно.
+        ax.set_xlim(*saved_xlim)
+        ax.set_ylim(*saved_ylim)
+    else:
+        ax.set_xlim(*view_xlim)
+        ax.set_ylim(*view_ylim)
+        ax.set_aspect("auto")
 
 
 def add_satellite_basemap(
@@ -648,6 +689,7 @@ def add_satellite_basemap(
     mercator_span_scale_y: float = 1.0,
     basemap_offset_east_m: float = 0.0,
     basemap_offset_north_m: float = 0.0,
+    preserve_axes_limits: bool = False,
 ) -> None:
     """Draw satellite/hybrid under data in EPSG:3857."""
     k = (basemap_source_key or "esri").strip().lower()
@@ -669,6 +711,7 @@ def add_satellite_basemap(
             mercator_span_scale_y=mercator_span_scale_y,
             basemap_offset_east_m=basemap_offset_east_m,
             basemap_offset_north_m=basemap_offset_north_m,
+            preserve_axes_limits=preserve_axes_limits,
         )
         return
 
@@ -689,6 +732,7 @@ def add_satellite_basemap(
             mercator_span_scale_y=mercator_span_scale_y,
             basemap_offset_east_m=basemap_offset_east_m,
             basemap_offset_north_m=basemap_offset_north_m,
+            preserve_axes_limits=preserve_axes_limits,
         )
         return
 
@@ -715,6 +759,7 @@ def add_satellite_basemap(
             mercator_span_scale_y=mercator_span_scale_y,
             basemap_offset_east_m=basemap_offset_east_m,
             basemap_offset_north_m=basemap_offset_north_m,
+            preserve_axes_limits=preserve_axes_limits,
         )
         return
 
@@ -736,6 +781,18 @@ def add_satellite_basemap(
         basemap_offset_east_m,
         basemap_offset_north_m,
     )
+    view_xlim, view_ylim = expand_mercator_extent_for_view_rotation(
+        inner_xlim, inner_ylim, view_rotation_deg
+    )
+
+    saved_xlim = saved_ylim = None
+    if preserve_axes_limits:
+        saved_xlim = ax.get_xlim()
+        saved_ylim = ax.get_ylim()
+        fetch_xlim, fetch_ylim = _merge_mercator_fetch_extents(
+            (fetch_xlim, fetch_ylim),
+            (saved_xlim, saved_ylim),
+        )
 
     ax.set_xlim(*fetch_xlim)
     ax.set_ylim(*fetch_ylim)
@@ -783,6 +840,10 @@ def add_satellite_basemap(
             l, r, b, t = im.get_extent()
             im.set_extent(_extent_with_basemap_offset_m((l, r, b, t), ox, oy))
 
-    ax.set_xlim(*inner_xlim)
-    ax.set_ylim(*inner_ylim)
-    ax.set_aspect("auto")
+    if preserve_axes_limits and saved_xlim is not None and saved_ylim is not None:
+        ax.set_xlim(*saved_xlim)
+        ax.set_ylim(*saved_ylim)
+    else:
+        ax.set_xlim(*view_xlim)
+        ax.set_ylim(*view_ylim)
+        ax.set_aspect("auto")

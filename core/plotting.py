@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib import transforms as mtransforms
@@ -9,7 +11,12 @@ from matplotlib.ticker import FuncFormatter, MaxNLocator, ScalarFormatter
 from matplotlib.tri import LinearTriInterpolator, Triangulation
 from scipy.ndimage import gaussian_filter
 
-from core.basemap import add_satellite_basemap, compute_mercator_axis_extent, web_mercator_to_lon_lat
+from core.basemap import (
+    add_satellite_basemap,
+    compute_mercator_axis_extent,
+    expand_mercator_extent_for_view_rotation,
+    web_mercator_to_lon_lat,
+)
 from core.interpolation import build_levels, mirror_fields
 
 
@@ -39,13 +46,103 @@ def _mercator_rotation_center(
     return cx, cy
 
 
+def _mercator_axis_limits_tuple(
+    triangulation: Triangulation,
+    axis_margin: float,
+    *,
+    mercator_force_square: bool,
+    mercator_span_scale_x: float,
+    mercator_span_scale_y: float,
+    view_rotation_deg: float = 0.0,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Охват осей в EPSG:3857 (м): inner по данным, при повороте — AABB повёрнутого прямоугольника.
+
+    При ненулевом угле расширяем ``xlim``/``ylim``, чтобы повёрнутые изолинии не обрезались по краям
+    осей; численный масштаб по X/Y меняется, зато карта заполняет доступную область без «сжатия».
+    """
+    inner_xlim, inner_ylim = compute_mercator_axis_extent(
+        triangulation.x,
+        triangulation.y,
+        axis_margin,
+        scale_x=mercator_span_scale_x,
+        scale_y=mercator_span_scale_y,
+        force_square=mercator_force_square,
+    )
+    return expand_mercator_extent_for_view_rotation(inner_xlim, inner_ylim, view_rotation_deg)
+
+
+def _set_mercator_view_axis_limits(
+    ax,
+    triangulation: Triangulation,
+    axis_margin: float,
+    view_rotation_deg: float,
+    *,
+    mercator_force_square: bool,
+    mercator_span_scale_x: float,
+    mercator_span_scale_y: float,
+) -> None:
+    """Пределы осей: inner при 0°, при повороте — расширенный AABB (как в basemap)."""
+    xlim, ylim = _mercator_axis_limits_tuple(
+        triangulation,
+        axis_margin,
+        mercator_force_square=mercator_force_square,
+        mercator_span_scale_x=mercator_span_scale_x,
+        mercator_span_scale_y=mercator_span_scale_y,
+        view_rotation_deg=view_rotation_deg,
+    )
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+
+
+def _finalize_web_mercator_aspect_after_layout(
+    axes: Iterable,
+    *,
+    triangulation: Triangulation,
+    axis_margin: float,
+    mercator_force_square: bool,
+    mercator_span_scale_x: float,
+    mercator_span_scale_y: float,
+    view_rotation_deg: float = 0.0,
+) -> None:
+    """Равный масштаб по осям (1 м = 1 м в EPSG:3857).
+
+    ``datalim`` + ``apply_aspect``, чтобы ось заполняла ячейку (в т.ч. при вертикальной раскладке).
+    Подложку рисуем **после** этой функции с ``preserve_axes_limits=True``, чтобы растр не сдвигал
+    уже согласованные пределы осей.
+    """
+    ax_list = list(axes)
+    if not ax_list:
+        return
+    fig = ax_list[0].figure
+    mx, my = _mercator_axis_limits_tuple(
+        triangulation,
+        axis_margin,
+        mercator_force_square=mercator_force_square,
+        mercator_span_scale_x=mercator_span_scale_x,
+        mercator_span_scale_y=mercator_span_scale_y,
+        view_rotation_deg=view_rotation_deg,
+    )
+    for ax in ax_list:
+        ax.set_xlim(mx)
+        ax.set_ylim(my)
+        ax.set_aspect("equal", adjustable="datalim", anchor="C")
+    fig.canvas.draw()
+    for ax in ax_list:
+        ax.apply_aspect()
+
+
 def _view_data_transform(
     ax,
     cx: float,
     cy: float,
     view_rotation_deg: float,
 ) -> mtransforms.Transform | None:
-    """Поворот вокруг центра той же рамки, что и подложка (imshow extent), иначе снимок «плывёт»."""
+    """Поворот **содержимого** (контуры, точки, подложка) вокруг центра inner-охвата.
+
+    Пределы осей при ненулевом угле **расширяются** до осевого AABB повёрнутого прямоугольника,
+    чтобы изолинии не обрезались и занимали область графика; подписи в градусах остаются
+    по краям прямоугольника в метрах Mercator.
+    """
     if abs(view_rotation_deg) < 1e-9:
         return None
     rot = mtransforms.Affine2D().translate(-cx, -cy).rotate_deg(float(view_rotation_deg)).translate(cx, cy)
@@ -524,7 +621,7 @@ def render_dual_maps(
     kw0 = _tfm_kw(tfm0)
     kw1 = _tfm_kw(tfm1)
 
-    if basemap_enabled:
+    if basemap_enabled and not web_mercator:
         add_satellite_basemap(
             axes[0],
             x=triangulation.x,
@@ -625,10 +722,19 @@ def render_dual_maps(
             axes[0],
             "Карта Ap",
             axis_margin=axis_margin,
-            skip_margins=basemap_enabled,
+            skip_margins=True,
             axis_tick_fontsize_x=axis_tick_fontsize_x,
             axis_tick_fontsize_y=axis_tick_fontsize_y,
             show_coordinate_grid=show_coordinate_grid,
+        )
+        _set_mercator_view_axis_limits(
+            axes[0],
+            triangulation,
+            axis_margin,
+            view_rotation_deg,
+            mercator_force_square=mercator_force_square,
+            mercator_span_scale_x=mercator_span_scale_x,
+            mercator_span_scale_y=mercator_span_scale_y,
         )
     else:
         _style_axis(
@@ -712,10 +818,19 @@ def render_dual_maps(
             axes[1],
             "Карта Ac",
             axis_margin=axis_margin,
-            skip_margins=basemap_enabled,
+            skip_margins=True,
             axis_tick_fontsize_x=axis_tick_fontsize_x,
             axis_tick_fontsize_y=axis_tick_fontsize_y,
             show_coordinate_grid=show_coordinate_grid,
+        )
+        _set_mercator_view_axis_limits(
+            axes[1],
+            triangulation,
+            axis_margin,
+            view_rotation_deg,
+            mercator_force_square=mercator_force_square,
+            mercator_span_scale_x=mercator_span_scale_x,
+            mercator_span_scale_y=mercator_span_scale_y,
         )
     else:
         _style_axis(
@@ -740,8 +855,34 @@ def render_dual_maps(
     # Одинаковый м/пиксель по X и Y в EPSG:3857; иначе «auto» даёт разное растяжение на разных фигурах
     # и подложка на overlay визуально не совпадает с отдельными картами при том же охвате.
     if web_mercator:
-        for ax in axes:
-            ax.set_aspect("equal")
+        _finalize_web_mercator_aspect_after_layout(
+            axes,
+            triangulation=triangulation,
+            axis_margin=axis_margin,
+            mercator_force_square=mercator_force_square,
+            mercator_span_scale_x=mercator_span_scale_x,
+            mercator_span_scale_y=mercator_span_scale_y,
+            view_rotation_deg=view_rotation_deg,
+        )
+        if basemap_enabled:
+            for ax, tfm in ((axes[0], tfm0), (axes[1], tfm1)):
+                add_satellite_basemap(
+                    ax,
+                    x=triangulation.x,
+                    y=triangulation.y,
+                    axis_margin=axis_margin,
+                    zorder=0,
+                    basemap_source_key=basemap_source,
+                    google_maps_api_key=google_maps_api_key,
+                    display_transform=tfm,
+                    view_rotation_deg=view_rotation_deg,
+                    mercator_force_square=mercator_force_square,
+                    mercator_span_scale_x=mercator_span_scale_x,
+                    mercator_span_scale_y=mercator_span_scale_y,
+                    basemap_offset_east_m=basemap_offset_east_m,
+                    basemap_offset_north_m=basemap_offset_north_m,
+                    preserve_axes_limits=True,
+                )
 
     for ax in axes:
         _draw_scale_bars(
@@ -814,7 +955,6 @@ def render_overlay_map(
     )
     _cf_extras = {"norm": bnorm, "extend": "neither"} if bnorm is not None else {"vmin": vmin, "vmax": vmax}
 
-    # Высота и пропорции ближе к одной панели «Отдельные карты» (12×5.5, 1×2), чтобы охват совпадал глазом.
     fig, ax = plt.subplots(1, 1, figsize=(6, 5.5), constrained_layout=False)
 
     map_alpha_factor = float(np.clip(map_layer_alpha, 0.05, 1.0)) if basemap_enabled else 1.0
@@ -829,7 +969,7 @@ def render_overlay_map(
     tfm = _view_data_transform(ax, cx, cy, view_rotation_deg)
     kw = _tfm_kw(tfm)
 
-    if basemap_enabled:
+    if basemap_enabled and not web_mercator:
         add_satellite_basemap(
             ax,
             x=triangulation.x,
@@ -956,10 +1096,19 @@ def render_overlay_map(
             ax,
             "Overlay Ap/Ac (проверка совпадения изолиний)",
             axis_margin=axis_margin,
-            skip_margins=basemap_enabled,
+            skip_margins=True,
             axis_tick_fontsize_x=axis_tick_fontsize_x,
             axis_tick_fontsize_y=axis_tick_fontsize_y,
             show_coordinate_grid=show_coordinate_grid,
+        )
+        _set_mercator_view_axis_limits(
+            ax,
+            triangulation,
+            axis_margin,
+            view_rotation_deg,
+            mercator_force_square=mercator_force_square,
+            mercator_span_scale_x=mercator_span_scale_x,
+            mercator_span_scale_y=mercator_span_scale_y,
         )
     else:
         _style_axis(
@@ -983,7 +1132,33 @@ def render_overlay_map(
     fig.colorbar(mappable, ax=ax, location="right", shrink=0.95)
     fig.subplots_adjust(left=0.08, right=0.94, top=0.93, bottom=0.11)
     if web_mercator:
-        ax.set_aspect("equal")
+        _finalize_web_mercator_aspect_after_layout(
+            (ax,),
+            triangulation=triangulation,
+            axis_margin=axis_margin,
+            mercator_force_square=mercator_force_square,
+            mercator_span_scale_x=mercator_span_scale_x,
+            mercator_span_scale_y=mercator_span_scale_y,
+            view_rotation_deg=view_rotation_deg,
+        )
+        if basemap_enabled:
+            add_satellite_basemap(
+                ax,
+                x=triangulation.x,
+                y=triangulation.y,
+                axis_margin=axis_margin,
+                zorder=0,
+                basemap_source_key=basemap_source,
+                google_maps_api_key=google_maps_api_key,
+                display_transform=tfm,
+                view_rotation_deg=view_rotation_deg,
+                mercator_force_square=mercator_force_square,
+                mercator_span_scale_x=mercator_span_scale_x,
+                mercator_span_scale_y=mercator_span_scale_y,
+                basemap_offset_east_m=basemap_offset_east_m,
+                basemap_offset_north_m=basemap_offset_north_m,
+                preserve_axes_limits=True,
+            )
     _draw_scale_bars(
         ax,
         triangulation.x,
