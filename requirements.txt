@@ -1,0 +1,11 @@
+pandas
+numpy
+scipy
+matplotlib
+Pillow
+contextily
+xyzservices
+pyproj
+PySide6
+openpyxl
+PyYAML

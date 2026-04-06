@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+
+# Local secrets (copy from config.example.yaml)
+config.local.yaml
+.env
+.env.local
+*.pyo
+*.pyd
+*.tmp
+*.log
+map.png
