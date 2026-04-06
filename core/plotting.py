@@ -754,7 +754,8 @@ def render_dual_maps(
             axis_tick_fontsize_y=axis_tick_fontsize_y,
             show_coordinate_grid=show_coordinate_grid,
         )
-    _apply_axis_inversion(axes[0], invert_x=invert_x, invert_y=invert_y)
+    if not web_mercator:
+        _apply_axis_inversion(axes[0], invert_x=invert_x, invert_y=invert_y)
     if show_isoline_map:
         fig.colorbar(cf_ap, ax=axes[0], location="right", shrink=0.95)
 
@@ -854,7 +855,8 @@ def render_dual_maps(
             axis_tick_fontsize_y=axis_tick_fontsize_y,
             show_coordinate_grid=show_coordinate_grid,
         )
-    _apply_axis_inversion(axes[1], invert_x=invert_x, invert_y=invert_y)
+    if not web_mercator:
+        _apply_axis_inversion(axes[1], invert_x=invert_x, invert_y=invert_y)
     if show_isoline_map:
         fig.colorbar(cf_ac, ax=axes[1], location="right", shrink=0.95)
 
@@ -894,6 +896,8 @@ def render_dual_maps(
                     basemap_offset_north_m=basemap_offset_north_m,
                     preserve_axes_limits=True,
                 )
+        for ax in axes:
+            _apply_axis_inversion(ax, invert_x=invert_x, invert_y=invert_y)
 
     for ax in axes:
         _draw_scale_bars(
@@ -1152,7 +1156,8 @@ def render_overlay_map(
             axis_tick_fontsize_y=axis_tick_fontsize_y,
             show_coordinate_grid=show_coordinate_grid,
         )
-    _apply_axis_inversion(ax, invert_x=invert_x, invert_y=invert_y)
+    if not web_mercator:
+        _apply_axis_inversion(ax, invert_x=invert_x, invert_y=invert_y)
 
     if show_isoline_map:
         if bnorm is not None:
@@ -1190,6 +1195,7 @@ def render_overlay_map(
                 basemap_offset_north_m=basemap_offset_north_m,
                 preserve_axes_limits=True,
             )
+        _apply_axis_inversion(ax, invert_x=invert_x, invert_y=invert_y)
     _draw_scale_bars(
         ax,
         triangulation.x,
