@@ -11,6 +11,7 @@ config.local.yaml
 *.log
 map.png
 map_for_corel.svg
+111.xlsx
 
 # Local UI config export
 pasha_ui_config.json
