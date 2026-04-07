@@ -429,6 +429,8 @@ class MainWindow(QMainWindow):
         self.show_scale_bar_x_checkbox.setChecked(True)
         self.show_scale_bar_y_checkbox = QCheckBox("Шкала масштаба по Y (вертикально на экране)")
         self.show_scale_bar_y_checkbox.setChecked(False)
+        self.show_north_arrow_checkbox = QCheckBox("Север (N)")
+        self.show_north_arrow_checkbox.setChecked(False)
 
         levels_row = QWidget()
         levels_row_layout = QHBoxLayout(levels_row)
@@ -588,6 +590,7 @@ class MainWindow(QMainWindow):
             self.show_coordinate_grid_checkbox,
             self.show_scale_bar_x_checkbox,
             self.show_scale_bar_y_checkbox,
+            self.show_north_arrow_checkbox,
             self.show_contour_lines_checkbox,
             self.show_contour_labels_checkbox,
         ):
@@ -932,6 +935,7 @@ class MainWindow(QMainWindow):
             "show_coordinate_grid": self.show_coordinate_grid_checkbox.isChecked(),
             "show_scale_bar_x": self.show_scale_bar_x_checkbox.isChecked(),
             "show_scale_bar_y": self.show_scale_bar_y_checkbox.isChecked(),
+            "show_north_arrow": self.show_north_arrow_checkbox.isChecked(),
             "show_contour_lines": self.show_contour_lines_checkbox.isChecked(),
             "show_contour_labels": self.show_contour_labels_checkbox.isChecked(),
             "contour_label_font": self.contour_label_font_spin.value(),
@@ -1033,6 +1037,7 @@ class MainWindow(QMainWindow):
             self.show_coordinate_grid_checkbox.setChecked(bool(d["show_coordinate_grid"]))
             self.show_scale_bar_x_checkbox.setChecked(bool(d["show_scale_bar_x"]))
             self.show_scale_bar_y_checkbox.setChecked(bool(d["show_scale_bar_y"]))
+            self.show_north_arrow_checkbox.setChecked(bool(d.get("show_north_arrow", False)))
             self.show_contour_lines_checkbox.setChecked(bool(d["show_contour_lines"]))
             self.show_contour_labels_checkbox.setChecked(bool(d["show_contour_labels"]))
             self.contour_label_font_spin.setValue(int(d["contour_label_font"]))
@@ -1228,6 +1233,7 @@ class MainWindow(QMainWindow):
             self.show_coordinate_grid_checkbox,
             self.show_scale_bar_x_checkbox,
             self.show_scale_bar_y_checkbox,
+            self.show_north_arrow_checkbox,
             self.use_custom_gradient_checkbox,
             self.show_contour_lines_checkbox,
             self.show_contour_labels_checkbox,
@@ -1469,6 +1475,7 @@ class MainWindow(QMainWindow):
                 show_coordinate_grid=self.show_coordinate_grid_checkbox.isChecked(),
                 show_scale_bar_x=self.show_scale_bar_x_checkbox.isChecked(),
                 show_scale_bar_y=self.show_scale_bar_y_checkbox.isChecked(),
+                show_north_arrow=self.show_north_arrow_checkbox.isChecked(),
                 invert_x=self.invert_x_checkbox.isChecked(),
                 invert_y=self.invert_y_checkbox.isChecked(),
                 x_label=axis_x_label,
@@ -1544,6 +1551,7 @@ class MainWindow(QMainWindow):
                 show_coordinate_grid=self.show_coordinate_grid_checkbox.isChecked(),
                 show_scale_bar_x=self.show_scale_bar_x_checkbox.isChecked(),
                 show_scale_bar_y=self.show_scale_bar_y_checkbox.isChecked(),
+                show_north_arrow=self.show_north_arrow_checkbox.isChecked(),
                 invert_x=self.invert_x_checkbox.isChecked(),
                 invert_y=self.invert_y_checkbox.isChecked(),
                 x_label=axis_x_label,

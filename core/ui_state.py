@@ -61,6 +61,7 @@ def default_ui_state_dict() -> dict[str, Any]:
         "show_coordinate_grid": True,
         "show_scale_bar_x": True,
         "show_scale_bar_y": False,
+        "show_north_arrow": False,
         "show_contour_lines": True,
         "show_contour_labels": False,
         "contour_label_font": 8,

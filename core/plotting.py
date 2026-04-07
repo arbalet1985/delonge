@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-
 import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib import transforms as mtransforms
@@ -606,6 +605,53 @@ def _format_meters_text(length_m: float) -> str:
     return f"{value} м"
 
 
+def _draw_north_arrow(ax, *, show: bool = True, view_rotation_deg: float = 0.0) -> None:
+    """Указатель на север в правом верхнем углу (в координатах оси).
+
+    Если карта повёрнута (``view_rotation_deg``), стрелку тоже поворачиваем, чтобы она показывала
+    направление "на север" на экране для повёрнутого содержимого.
+    """
+    if not show:
+        return
+
+    rot = mtransforms.Affine2D()
+    if abs(float(view_rotation_deg)) > 1e-9:
+        # Поворот вокруг якоря стрелки в координатах оси (fraction).
+        rot = rot.rotate_deg_around(0.96, 0.90, float(view_rotation_deg))
+    trans = rot + ax.transAxes
+
+    # Simple arrow + N (shorter than before)
+    x = 0.96
+    y_top = 0.96
+    y_bot = 0.88
+    inverted_y = bool(ax.yaxis_inverted())
+    y_head, y_tail = (y_bot, y_top) if inverted_y else (y_top, y_bot)
+    ax.annotate(
+        "",
+        xy=(x, y_head),
+        xytext=(x, y_tail),
+        xycoords=trans,
+        textcoords=trans,
+        arrowprops=dict(arrowstyle="-|>", linewidth=1.8, color="black", shrinkA=0, shrinkB=0),
+        zorder=9,
+        clip_on=False,
+    )
+    ax.text(
+        x,
+        y_head + (-0.02 if inverted_y else 0.02),
+        "N",
+        transform=trans,
+        ha="center",
+        va="top" if inverted_y else "bottom",
+        fontsize=10,
+        fontweight="bold",
+        color="black",
+        bbox=dict(facecolor="white", edgecolor="none", alpha=0.65, boxstyle="round,pad=0.15"),
+        zorder=9,
+        clip_on=False,
+    )
+
+
 def _nice_scale_length_meters(target_m: float) -> int:
     # Use powers of 10 to keep scale bar labels like 10, 100, 1000 m.
     target = max(float(target_m), 1.0)
@@ -697,6 +743,7 @@ def render_dual_maps(
     show_isoline_map: bool = True,
     span_scale_x: float = 1.0,
     span_scale_y: float = 1.0,
+    show_north_arrow: bool = False,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
     fill_levels, contour_levels, vmin, vmax, cmap, bnorm = _build_fill_cmap_and_norm(
@@ -1101,6 +1148,7 @@ def render_dual_maps(
             show_scale_bar_y=show_scale_bar_y,
             web_mercator=web_mercator,
         )
+        _draw_north_arrow(ax, show=show_north_arrow, view_rotation_deg=view_rotation_deg)
 
     return fig
 
@@ -1153,6 +1201,7 @@ def render_overlay_map(
     show_isoline_map: bool = True,
     span_scale_x: float = 1.0,
     span_scale_y: float = 1.0,
+    show_north_arrow: bool = False,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
     fill_levels, contour_levels, vmin, vmax, cmap, bnorm = _build_fill_cmap_and_norm(
@@ -1470,4 +1519,5 @@ def render_overlay_map(
         show_scale_bar_y=show_scale_bar_y,
         web_mercator=web_mercator,
     )
+    _draw_north_arrow(ax, show=show_north_arrow, view_rotation_deg=view_rotation_deg)
     return fig
