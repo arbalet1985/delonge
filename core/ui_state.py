@@ -47,6 +47,7 @@ def default_ui_state_dict() -> dict[str, Any]:
         "map_view_rotation": 0.0,
         "basemap_enabled": False,
         "show_isoline_map": True,
+        "basemap_show_attribution": True,
         "basemap_source_key": "yandex_hybrid",
         "map_opacity_pct": 75,
         "overlay_alpha_pct": 50,

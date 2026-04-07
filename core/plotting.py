@@ -370,6 +370,60 @@ def _compute_levels(
     return levels, vmin, vmax
 
 
+def _compute_levels_any(
+    values: list[np.ndarray],
+    *,
+    levels_count: int,
+    levels_step: float | None,
+) -> tuple[np.ndarray, float, float]:
+    """Уровни заливки/изолиний для 1 поля (Ap или Ac)."""
+    if not values:
+        raise ValueError("Нет данных для построения уровней.")
+    vmin = float(min(float(np.min(v)) for v in values))
+    vmax = float(max(float(np.max(v)) for v in values))
+    if levels_step is None or levels_step <= 0:
+        if vmin == vmax:
+            vmax = vmin + 1.0
+        levels = np.linspace(vmin, vmax, int(max(2, levels_count)))
+        return levels, vmin, vmax
+
+    if vmin == vmax:
+        vmax = vmin + float(levels_step)
+    step = float(levels_step)
+    levels = np.arange(vmin, vmax + step * 0.999, step)
+    if levels.size < 2:
+        levels = np.linspace(vmin, vmax, int(max(2, levels_count)))
+    return levels, vmin, vmax
+
+
+def _build_fill_cmap_and_norm_any(
+    values_for_levels: list[np.ndarray],
+    *,
+    levels_count: int,
+    levels_step: float | None,
+    cmap_start: str,
+    cmap_end: str,
+    custom_gradient_colors: list[str] | None,
+) -> tuple[np.ndarray, np.ndarray, float, float, LinearSegmentedColormap, Normalize | None]:
+    """Как `_build_fill_cmap_and_norm`, но для 1 поля."""
+    contour_levels, vmin, vmax = _compute_levels_any(
+        values_for_levels, levels_count=levels_count, levels_step=levels_step
+    )
+    if custom_gradient_colors and len(custom_gradient_colors) >= 2:
+        n = len(custom_gradient_colors)
+        positions = np.linspace(0.0, 1.0, n)
+        cmap = LinearSegmentedColormap.from_list(
+            "custom_gradient",
+            list(zip(positions.tolist(), custom_gradient_colors)),
+            N=256,
+        )
+        n_fill = int(max(128, min(512, 32 * n)))
+        fill_levels = np.linspace(float(vmin), float(vmax), n_fill)
+        norm = Normalize(vmin=float(vmin), vmax=float(vmax), clip=True)
+        return fill_levels, contour_levels, vmin, vmax, cmap, norm
+    cmap = _build_cmap(cmap_start, cmap_end)
+    return contour_levels, contour_levels, vmin, vmax, cmap, None
+
 def _build_fill_cmap_and_norm(
     ap_plot: np.ndarray,
     ac_plot: np.ndarray,
@@ -694,10 +748,276 @@ def _interpolate_to_grid(
     return xg, yg, zg_data
 
 
+def _render_single_map(
+    triangulation: Triangulation,
+    values: np.ndarray,
+    *,
+    title: str,
+    levels_count: int,
+    levels_step: float | None,
+    point_size: int,
+    smooth_contours: bool,
+    smooth_sigma: float,
+    grid_size: int,
+    show_points: bool,
+    show_coordinates: bool,
+    show_rn_labels: bool,
+    rn_labels: list[str] | None,
+    show_coordinate_grid: bool,
+    show_scale_bar_x: bool,
+    show_scale_bar_y: bool,
+    invert_x: bool,
+    invert_y: bool,
+    x_label: str,
+    y_label: str,
+    show_contour_lines: bool,
+    contour_line_width: float,
+    show_contour_labels: bool,
+    contour_label_font_size: int,
+    cmap_start: str,
+    cmap_end: str,
+    custom_gradient_colors: list[str] | None,
+    annotation_font_size: int,
+    axis_margin: float,
+    basemap_enabled: bool,
+    map_layer_alpha: float,
+    web_mercator: bool,
+    basemap_source: str,
+    coordinate_degrees_lon_lat: tuple[np.ndarray, np.ndarray] | None,
+    google_maps_api_key: str | None,
+    view_rotation_deg: float,
+    axis_tick_fontsize_x: float,
+    axis_tick_fontsize_y: float,
+    mercator_force_square: bool,
+    mercator_span_scale_x: float,
+    mercator_span_scale_y: float,
+    basemap_offset_east_m: float,
+    basemap_offset_north_m: float,
+    show_isoline_map: bool,
+    basemap_show_attribution: bool,
+    show_north_arrow: bool,
+) -> Figure:
+    fill_levels, contour_levels, vmin, vmax, cmap, bnorm = _build_fill_cmap_and_norm_any(
+        [values],
+        levels_count=levels_count,
+        levels_step=levels_step,
+        cmap_start=cmap_start,
+        cmap_end=cmap_end,
+        custom_gradient_colors=custom_gradient_colors,
+    )
+    _cf_extras = {"norm": bnorm, "extend": "neither"} if bnorm is not None else {"vmin": vmin, "vmax": vmax}
+    fig, ax = plt.subplots(1, 1, figsize=(9.0, 6.0), constrained_layout=False)
+
+    fill_alpha = float(np.clip(map_layer_alpha, 0.05, 1.0)) if basemap_enabled else 1.0
+    cx, cy = _mercator_rotation_center(
+        triangulation,
+        axis_margin,
+        mercator_force_square=mercator_force_square,
+        mercator_span_scale_x=mercator_span_scale_x,
+        mercator_span_scale_y=mercator_span_scale_y,
+    )
+    tfm = _view_data_transform(ax, cx, cy, view_rotation_deg)
+    kw = _tfm_kw(tfm)
+
+    if basemap_enabled and not web_mercator:
+        add_satellite_basemap(
+            ax,
+            x=triangulation.x,
+            y=triangulation.y,
+            axis_margin=axis_margin,
+            zorder=0,
+            basemap_source_key=basemap_source,
+            google_maps_api_key=google_maps_api_key,
+            display_transform=tfm,
+            view_rotation_deg=view_rotation_deg,
+            mercator_force_square=mercator_force_square,
+            mercator_span_scale_x=mercator_span_scale_x,
+            mercator_span_scale_y=mercator_span_scale_y,
+            basemap_offset_east_m=basemap_offset_east_m,
+            basemap_offset_north_m=basemap_offset_north_m,
+            show_attribution=basemap_show_attribution,
+        )
+
+    if show_isoline_map:
+        if smooth_contours:
+            xg, yg, zg = _interpolate_to_grid(triangulation, values, grid_size=grid_size, smooth_sigma=smooth_sigma)
+            if basemap_enabled:
+                cf = _imshow_fill(
+                    ax,
+                    xg=xg,
+                    yg=yg,
+                    zg=zg,
+                    cmap=cmap,
+                    alpha=fill_alpha,
+                    zorder=1,
+                    extras=_cf_extras,
+                    interpolation="bilinear",
+                    tfm_kw=kw,
+                )
+            else:
+                cf = ax.contourf(
+                    xg,
+                    yg,
+                    zg,
+                    levels=fill_levels,
+                    cmap=cmap,
+                    alpha=fill_alpha,
+                    antialiased=False,
+                    linewidths=0.0,
+                    zorder=1,
+                    **_cf_extras,
+                    **kw,
+                )
+                _seal_filled_contours(cf)
+            if show_contour_lines:
+                cs = ax.contour(
+                    xg,
+                    yg,
+                    zg,
+                    levels=contour_levels,
+                    colors="#101010",
+                    linewidths=float(contour_line_width),
+                    alpha=1.0,
+                    **kw,
+                )
+                if show_contour_labels:
+                    ax.clabel(cs, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
+        else:
+            if basemap_enabled:
+                xg, yg, zg = _interpolate_to_grid(triangulation, values, grid_size=grid_size, smooth_sigma=0.0)
+                cf = _imshow_fill(
+                    ax,
+                    xg=xg,
+                    yg=yg,
+                    zg=zg,
+                    cmap=cmap,
+                    alpha=fill_alpha,
+                    zorder=1,
+                    extras=_cf_extras,
+                    interpolation="nearest",
+                    tfm_kw=kw,
+                )
+            else:
+                cf = ax.tricontourf(
+                    triangulation,
+                    values,
+                    levels=fill_levels,
+                    cmap=cmap,
+                    alpha=fill_alpha,
+                    antialiased=False,
+                    zorder=1,
+                    **_cf_extras,
+                    **kw,
+                )
+                _seal_filled_contours(cf)
+            if show_contour_lines:
+                cs = ax.tricontour(
+                    triangulation,
+                    values,
+                    levels=contour_levels,
+                    colors="#101010",
+                    linewidths=float(contour_line_width),
+                    alpha=1.0,
+                    **kw,
+                )
+                if show_contour_labels:
+                    ax.clabel(cs, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
+
+    _draw_points_and_labels(
+        ax,
+        triangulation.x,
+        triangulation.y,
+        point_size=point_size,
+        show_points=show_points,
+        show_coordinates=show_coordinates,
+        show_rn_labels=show_rn_labels,
+        rn_labels=rn_labels,
+        annotation_font_size=annotation_font_size,
+        coordinate_degrees_lon_lat=coordinate_degrees_lon_lat if web_mercator else None,
+        data_transform=tfm,
+    )
+    if web_mercator:
+        _style_axis_mercator_degrees(
+            ax,
+            title,
+            axis_margin=axis_margin,
+            skip_margins=True,
+            axis_tick_fontsize_x=axis_tick_fontsize_x,
+            axis_tick_fontsize_y=axis_tick_fontsize_y,
+            show_coordinate_grid=show_coordinate_grid,
+        )
+        _set_mercator_view_axis_limits(
+            ax,
+            triangulation,
+            axis_margin,
+            view_rotation_deg,
+            mercator_force_square=mercator_force_square,
+            mercator_span_scale_x=mercator_span_scale_x,
+            mercator_span_scale_y=mercator_span_scale_y,
+        )
+    else:
+        _style_axis(
+            ax,
+            title,
+            x_label=x_label,
+            y_label=y_label,
+            axis_margin=axis_margin,
+            skip_margins=basemap_enabled,
+            axis_tick_fontsize_x=axis_tick_fontsize_x,
+            axis_tick_fontsize_y=axis_tick_fontsize_y,
+            show_coordinate_grid=show_coordinate_grid,
+        )
+    _apply_axis_inversion(ax, invert_x=invert_x, invert_y=invert_y)
+    if show_isoline_map:
+        fig.colorbar(cf, ax=ax, location="right", shrink=0.95)
+
+    fig.subplots_adjust(left=0.08, right=0.95, top=0.92, bottom=0.11)
+    if web_mercator:
+        _finalize_web_mercator_aspect_after_layout(
+            (ax,),
+            triangulation=triangulation,
+            axis_margin=axis_margin,
+            mercator_force_square=mercator_force_square,
+            mercator_span_scale_x=mercator_span_scale_x,
+            mercator_span_scale_y=mercator_span_scale_y,
+            view_rotation_deg=view_rotation_deg,
+        )
+        if basemap_enabled:
+            add_satellite_basemap(
+                ax,
+                x=triangulation.x,
+                y=triangulation.y,
+                axis_margin=axis_margin,
+                zorder=0,
+                basemap_source_key=basemap_source,
+                google_maps_api_key=google_maps_api_key,
+                display_transform=tfm,
+                view_rotation_deg=view_rotation_deg,
+                mercator_force_square=mercator_force_square,
+                mercator_span_scale_x=mercator_span_scale_x,
+                mercator_span_scale_y=mercator_span_scale_y,
+                basemap_offset_east_m=basemap_offset_east_m,
+                basemap_offset_north_m=basemap_offset_north_m,
+                preserve_axes_limits=True,
+                show_attribution=basemap_show_attribution,
+            )
+
+    _draw_scale_bars(
+        ax,
+        triangulation.x,
+        triangulation.y,
+        show_scale_bar_x=show_scale_bar_x,
+        show_scale_bar_y=show_scale_bar_y,
+        web_mercator=web_mercator,
+    )
+    _draw_north_arrow(ax, show=show_north_arrow, view_rotation_deg=view_rotation_deg)
+    return fig
+
+
 def render_dual_maps(
     triangulation: Triangulation,
-    ap: np.ndarray,
-    ac: np.ndarray,
+    ap: np.ndarray | None,
+    ac: np.ndarray | None,
     levels_count: int = 10,
     levels_step: float | None = None,
     point_size: int = 18,
@@ -741,10 +1061,64 @@ def render_dual_maps(
     basemap_offset_east_m: float = 0.0,
     basemap_offset_north_m: float = 0.0,
     show_isoline_map: bool = True,
+    basemap_show_attribution: bool = True,
     span_scale_x: float = 1.0,
     span_scale_y: float = 1.0,
     show_north_arrow: bool = False,
 ) -> Figure:
+    if ap is None and ac is None:
+        raise ValueError("Нужны данные Ap или Ac.")
+    if ap is None or ac is None:
+        values = ap if ap is not None else ac
+        title = "Карта Ap" if ap is not None else "Карта Ac"
+        return _render_single_map(
+            triangulation,
+            values,  # type: ignore[arg-type]
+            title=title,
+            levels_count=levels_count,
+            levels_step=levels_step,
+            point_size=point_size,
+            smooth_contours=smooth_contours,
+            smooth_sigma=smooth_sigma,
+            grid_size=grid_size,
+            show_points=show_points,
+            show_coordinates=show_coordinates,
+            show_rn_labels=show_rn_labels,
+            rn_labels=rn_labels,
+            show_coordinate_grid=show_coordinate_grid,
+            show_scale_bar_x=show_scale_bar_x,
+            show_scale_bar_y=show_scale_bar_y,
+            invert_x=invert_x,
+            invert_y=invert_y,
+            x_label=x_label,
+            y_label=y_label,
+            show_contour_lines=show_contour_lines,
+            contour_line_width=contour_line_width,
+            show_contour_labels=show_contour_labels,
+            contour_label_font_size=contour_label_font_size,
+            cmap_start=cmap_start,
+            cmap_end=cmap_end,
+            custom_gradient_colors=custom_gradient_colors,
+            annotation_font_size=annotation_font_size,
+            axis_margin=axis_margin,
+            basemap_enabled=basemap_enabled,
+            map_layer_alpha=map_layer_alpha,
+            web_mercator=web_mercator,
+            basemap_source=basemap_source,
+            coordinate_degrees_lon_lat=coordinate_degrees_lon_lat,
+            google_maps_api_key=google_maps_api_key,
+            view_rotation_deg=view_rotation_deg,
+            axis_tick_fontsize_x=axis_tick_fontsize_x,
+            axis_tick_fontsize_y=axis_tick_fontsize_y,
+            mercator_force_square=mercator_force_square,
+            mercator_span_scale_x=mercator_span_scale_x,
+            mercator_span_scale_y=mercator_span_scale_y,
+            basemap_offset_east_m=basemap_offset_east_m,
+            basemap_offset_north_m=basemap_offset_north_m,
+            show_isoline_map=show_isoline_map,
+            basemap_show_attribution=basemap_show_attribution,
+            show_north_arrow=show_north_arrow,
+        )
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
     fill_levels, contour_levels, vmin, vmax, cmap, bnorm = _build_fill_cmap_and_norm(
         ap_plot,
@@ -794,6 +1168,7 @@ def render_dual_maps(
             mercator_span_scale_y=mercator_span_scale_y,
             basemap_offset_east_m=basemap_offset_east_m,
             basemap_offset_north_m=basemap_offset_north_m,
+            show_attribution=basemap_show_attribution,
         )
         add_satellite_basemap(
             axes[1],
@@ -810,6 +1185,7 @@ def render_dual_maps(
             mercator_span_scale_y=mercator_span_scale_y,
             basemap_offset_east_m=basemap_offset_east_m,
             basemap_offset_north_m=basemap_offset_north_m,
+            show_attribution=basemap_show_attribution,
         )
 
     if show_isoline_map:
@@ -1135,6 +1511,7 @@ def render_dual_maps(
                     basemap_offset_east_m=basemap_offset_east_m,
                     basemap_offset_north_m=basemap_offset_north_m,
                     preserve_axes_limits=True,
+                    show_attribution=basemap_show_attribution,
                 )
         for ax in axes:
             _apply_axis_inversion(ax, invert_x=invert_x, invert_y=invert_y)
@@ -1199,6 +1576,7 @@ def render_overlay_map(
     basemap_offset_east_m: float = 0.0,
     basemap_offset_north_m: float = 0.0,
     show_isoline_map: bool = True,
+    basemap_show_attribution: bool = True,
     span_scale_x: float = 1.0,
     span_scale_y: float = 1.0,
     show_north_arrow: bool = False,
@@ -1245,6 +1623,7 @@ def render_overlay_map(
             mercator_span_scale_y=mercator_span_scale_y,
             basemap_offset_east_m=basemap_offset_east_m,
             basemap_offset_north_m=basemap_offset_north_m,
+            show_attribution=basemap_show_attribution,
         )
 
     if show_isoline_map:
@@ -1432,6 +1811,7 @@ def render_overlay_map(
                 basemap_offset_east_m=basemap_offset_east_m,
                 basemap_offset_north_m=basemap_offset_north_m,
                 preserve_axes_limits=True,
+                show_attribution=basemap_show_attribution,
             )
         _apply_axis_inversion(ax, invert_x=invert_x, invert_y=invert_y)
     _draw_scale_bars(

@@ -7,6 +7,7 @@ from matplotlib.figure import Figure
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSlider,
     QSpinBox,
+    QProgressDialog,
     QSplitter,
     QTabWidget,
     QToolButton,
@@ -211,7 +213,7 @@ class MainWindow(QMainWindow):
         )
 
         self.map_extent_zoom_spin = QSpinBox()
-        self.map_extent_zoom_spin.setRange(25, 500)
+        self.map_extent_zoom_spin.setRange(5, 500)
         self.map_extent_zoom_spin.setValue(100)
         self.map_extent_zoom_spin.setSuffix(" %")
         self.map_extent_zoom_spin.setToolTip(
@@ -227,14 +229,14 @@ class MainWindow(QMainWindow):
             "Для точек в градусах WGS84 карта строится в Web Mercator (с подложкой или без)."
         )
         self.mercator_span_x_spin = QSpinBox()
-        self.mercator_span_x_spin.setRange(25, 400)
+        self.mercator_span_x_spin.setRange(5, 400)
         self.mercator_span_x_spin.setValue(100)
         self.mercator_span_x_spin.setSuffix(" %")
         self.mercator_span_x_spin.setToolTip(
             "Масштаб охвата по оси X. Больше % — шире кадр по X; меньше % — крупнее детали по X."
         )
         self.mercator_span_y_spin = QSpinBox()
-        self.mercator_span_y_spin.setRange(25, 400)
+        self.mercator_span_y_spin.setRange(5, 400)
         self.mercator_span_y_spin.setValue(100)
         self.mercator_span_y_spin.setSuffix(" %")
         self.mercator_span_y_spin.setToolTip(
@@ -319,6 +321,10 @@ class MainWindow(QMainWindow):
             "Снять галочку, чтобы скрыть заливку и изолинии и оставить только подложку "
             "(и точки, сетку, масштаб — если они включены ниже)."
         )
+
+        self.basemap_attribution_checkbox = QCheckBox("Подпись источника подложки")
+        self.basemap_attribution_checkbox.setChecked(True)
+        self.basemap_attribution_checkbox.setToolTip("Показывать/скрывать подпись источника (Esri/Google и т.п.).")
 
         self.basemap_source_combo = QComboBox()
         self.basemap_source_combo.addItem("Esri World Imagery (тайлы)", "esri")
@@ -557,6 +563,7 @@ class MainWindow(QMainWindow):
         fl_bm = _compact_form(g_bm)
         fl_bm.addRow(self.basemap_checkbox)
         fl_bm.addRow(self.show_isoline_map_checkbox)
+        fl_bm.addRow(self.basemap_attribution_checkbox)
         fl_bm.addRow("Источник:", self.basemap_source_combo)
         fl_bm.addRow("Сдвиг:", basemap_off_row)
         fl_bm.addRow("Слой / подложка:", map_opacity_row)
@@ -921,6 +928,7 @@ class MainWindow(QMainWindow):
             "map_view_rotation": self.map_view_rotation_spin.value(),
             "basemap_enabled": self.basemap_checkbox.isChecked(),
             "show_isoline_map": self.show_isoline_map_checkbox.isChecked(),
+            "basemap_show_attribution": self.basemap_attribution_checkbox.isChecked(),
             "basemap_source_key": src_key,
             "map_opacity_pct": self.map_opacity_slider.value(),
             "overlay_alpha_pct": self.alpha_slider.value(),
@@ -1006,6 +1014,7 @@ class MainWindow(QMainWindow):
             self.map_view_rotation_spin.setValue(float(d["map_view_rotation"]))
             self.basemap_checkbox.setChecked(bool(d["basemap_enabled"]))
             self.show_isoline_map_checkbox.setChecked(bool(d.get("show_isoline_map", True)))
+            self.basemap_attribution_checkbox.setChecked(bool(d.get("basemap_show_attribution", True)))
             key = str(d.get("basemap_source_key") or "esri")
             idx = self.basemap_source_combo.findData(key)
             if idx < 0:
@@ -1244,6 +1253,7 @@ class MainWindow(QMainWindow):
             self.smooth_contours_checkbox,
             self.basemap_checkbox,
             self.show_isoline_map_checkbox,
+            self.basemap_attribution_checkbox,
             self.mercator_square_extent_checkbox,
         ]
         for checkbox in live_checkboxes:
@@ -1341,6 +1351,30 @@ class MainWindow(QMainWindow):
     def _sync_horizontal_align_btn_text(self, checked: bool) -> None:
         self.horizontal_align_btn.setText("Карты: сверху вниз" if checked else "Карты: слева направо")
 
+    def _run_with_busy_dialog(self, title: str, fn) -> None:
+        """Показывает индикатор загрузки перед длительной задачей (например, подложка по сети)."""
+        dlg = QProgressDialog(title, "", 0, 0, self)
+        dlg.setWindowTitle("Загрузка")
+        dlg.setWindowModality(Qt.ApplicationModal)
+        dlg.setCancelButton(None)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(True)
+        dlg.setAutoReset(True)
+        dlg.show()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+
+        def _wrapped() -> None:
+            try:
+                fn()
+            finally:
+                try:
+                    dlg.close()
+                finally:
+                    QApplication.restoreOverrideCursor()
+
+        # Дать Qt отрисовать диалог до запуска тяжёлого рендера.
+        QTimer.singleShot(0, _wrapped)
+
     def on_load_excel(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -1402,11 +1436,11 @@ class MainWindow(QMainWindow):
         rn = self.column_combos["rn"].currentText().strip() or None
         x = self.column_combos["x"].currentText().strip()
         y = self.column_combos["y"].currentText().strip()
-        ap = self.column_combos["ap"].currentText().strip()
-        ac = self.column_combos["ac"].currentText().strip()
+        ap = self.column_combos["ap"].currentText().strip() or None
+        ac = self.column_combos["ac"].currentText().strip() or None
 
-        if not (x and y and ap and ac):
-            raise ValueError("Выберите колонки x, y, Ap и Ac.")
+        if not (x and y and (ap or ac)):
+            raise ValueError("Выберите колонки x, y и хотя бы одну из: Ap или Ac.")
         return ColumnMap(rn=rn, x=x, y=y, ap=ap, ac=ac)
 
     def _ensure_data_loaded(self) -> bool:
@@ -1441,84 +1475,95 @@ class MainWindow(QMainWindow):
     def on_build_maps(self) -> None:
         if not self._ensure_data_loaded():
             return
-        self._app_config = load_app_config()
+        def _do() -> None:
+            self._app_config = load_app_config()
 
-        ap = self.data["ap"].to_numpy(dtype=float)
-        ac = self.data["ac"].to_numpy(dtype=float)
-        rn_labels = None
-        if "rn" in self.data.columns:
-            rn_labels = [str(v) for v in self.data["rn"].tolist()]
-        axis_x_label = "Y" if self.swap_xy_checkbox.isChecked() else "X"
-        axis_y_label = "X" if self.swap_xy_checkbox.isChecked() else "Y"
-        if self._using_web_mercator:
-            axis_x_label = f"{axis_x_label} (м)"
-            axis_y_label = f"{axis_y_label} (м)"
+            ap = self.data["ap"].to_numpy(dtype=float) if "ap" in self.data.columns else None
+            ac = self.data["ac"].to_numpy(dtype=float) if "ac" in self.data.columns else None
+            rn_labels = None
+            if "rn" in self.data.columns:
+                rn_labels = [str(v) for v in self.data["rn"].tolist()]
+            axis_x_label = "Y" if self.swap_xy_checkbox.isChecked() else "X"
+            axis_y_label = "X" if self.swap_xy_checkbox.isChecked() else "Y"
+            if self._using_web_mercator:
+                axis_x_label = f"{axis_x_label} (м)"
+                axis_y_label = f"{axis_y_label} (м)"
 
-        levels_step = self.levels_step_spin.value() if self.use_levels_step_checkbox.isChecked() else None
+            levels_step = self.levels_step_spin.value() if self.use_levels_step_checkbox.isChecked() else None
+            basemap_on = self.basemap_checkbox.isChecked() and self._basemap_allowed()
+            _extent_z = self.map_extent_zoom_spin.value() / 100.0
+            try:
+                fig = render_dual_maps(
+                    triangulation=self.triangulation,
+                    ap=ap,
+                    ac=ac,
+                    levels_count=self.levels_spin.value(),
+                    levels_step=levels_step,
+                    point_size=self.point_size_spin.value(),
+                    enforce_mirror=self.enforce_mirror_checkbox.isChecked(),
+                    smooth_contours=self.smooth_contours_checkbox.isChecked(),
+                    smooth_sigma=self.smoothing_spin.value() / 10.0,
+                    show_points=self.show_points_checkbox.isChecked(),
+                    show_coordinates=self.show_coordinates_checkbox.isChecked(),
+                    show_rn_labels=self.show_rn_checkbox.isChecked(),
+                    rn_labels=rn_labels,
+                    show_coordinate_grid=self.show_coordinate_grid_checkbox.isChecked(),
+                    show_scale_bar_x=self.show_scale_bar_x_checkbox.isChecked(),
+                    show_scale_bar_y=self.show_scale_bar_y_checkbox.isChecked(),
+                    show_north_arrow=self.show_north_arrow_checkbox.isChecked(),
+                    invert_x=self.invert_x_checkbox.isChecked(),
+                    invert_y=self.invert_y_checkbox.isChecked(),
+                    x_label=axis_x_label,
+                    y_label=axis_y_label,
+                    show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
+                    contour_line_width=self.contour_line_width_spin.value(),
+                    show_contour_labels=self.show_contour_labels_checkbox.isChecked(),
+                    contour_label_font_size=self.contour_label_font_spin.value(),
+                    vertical_layout=self.horizontal_align_btn.isChecked(),
+                    annotation_font_size=self.annotation_font_spin.value(),
+                    axis_margin=self.axis_margin_spin.value() / 100.0,
+                    cmap_start=self.cmap_start,
+                    cmap_end=self.cmap_end,
+                    custom_gradient_colors=self._custom_gradient_colors_for_render(),
+                    basemap_enabled=basemap_on,
+                    map_layer_alpha=self.map_opacity_slider.value() / 100.0,
+                    web_mercator=self._using_web_mercator,
+                    basemap_source=self._selected_basemap_source_key(),
+                    coordinate_degrees_lon_lat=self._label_lon_lat_deg,
+                    google_maps_api_key=self._app_config.google_maps_api_key,
+                    view_rotation_deg=self.map_view_rotation_spin.value(),
+                    axis_tick_fontsize_x=float(self.axis_tick_font_x_spin.value()),
+                    axis_tick_fontsize_y=float(self.axis_tick_font_y_spin.value()),
+                    mercator_force_square=self.mercator_square_extent_checkbox.isChecked(),
+                    mercator_span_scale_x=self.mercator_span_x_spin.value() / 100.0 * _extent_z,
+                    mercator_span_scale_y=self.mercator_span_y_spin.value() / 100.0 * _extent_z,
+                    span_scale_x=self.mercator_span_x_spin.value() / 100.0 * _extent_z,
+                    span_scale_y=self.mercator_span_y_spin.value() / 100.0 * _extent_z,
+                    basemap_offset_east_m=self.basemap_offset_e_spin.value(),
+                    basemap_offset_north_m=self.basemap_offset_n_spin.value(),
+                    show_isoline_map=self.show_isoline_map_checkbox.isChecked(),
+                    basemap_show_attribution=self.basemap_attribution_checkbox.isChecked(),
+                )
+            except BasemapError as exc:
+                self._show_error(str(exc))
+                return
+            self.main_canvas = self._replace_canvas(self.main_canvas, fig, "Отдельные карты", 0)
+            self.tabs.setCurrentIndex(0)
+
         basemap_on = self.basemap_checkbox.isChecked() and self._basemap_allowed()
-        _extent_z = self.map_extent_zoom_spin.value() / 100.0
-        try:
-            fig = render_dual_maps(
-                triangulation=self.triangulation,
-                ap=ap,
-                ac=ac,
-                levels_count=self.levels_spin.value(),
-                levels_step=levels_step,
-                point_size=self.point_size_spin.value(),
-                enforce_mirror=self.enforce_mirror_checkbox.isChecked(),
-                smooth_contours=self.smooth_contours_checkbox.isChecked(),
-                smooth_sigma=self.smoothing_spin.value() / 10.0,
-                show_points=self.show_points_checkbox.isChecked(),
-                show_coordinates=self.show_coordinates_checkbox.isChecked(),
-                show_rn_labels=self.show_rn_checkbox.isChecked(),
-                rn_labels=rn_labels,
-                show_coordinate_grid=self.show_coordinate_grid_checkbox.isChecked(),
-                show_scale_bar_x=self.show_scale_bar_x_checkbox.isChecked(),
-                show_scale_bar_y=self.show_scale_bar_y_checkbox.isChecked(),
-                show_north_arrow=self.show_north_arrow_checkbox.isChecked(),
-                invert_x=self.invert_x_checkbox.isChecked(),
-                invert_y=self.invert_y_checkbox.isChecked(),
-                x_label=axis_x_label,
-                y_label=axis_y_label,
-                show_contour_lines=self.show_contour_lines_checkbox.isChecked(),
-                contour_line_width=self.contour_line_width_spin.value(),
-                show_contour_labels=self.show_contour_labels_checkbox.isChecked(),
-                contour_label_font_size=self.contour_label_font_spin.value(),
-                vertical_layout=self.horizontal_align_btn.isChecked(),
-                annotation_font_size=self.annotation_font_spin.value(),
-                axis_margin=self.axis_margin_spin.value() / 100.0,
-                cmap_start=self.cmap_start,
-                cmap_end=self.cmap_end,
-                custom_gradient_colors=self._custom_gradient_colors_for_render(),
-                basemap_enabled=basemap_on,
-                map_layer_alpha=self.map_opacity_slider.value() / 100.0,
-                web_mercator=self._using_web_mercator,
-                basemap_source=self._selected_basemap_source_key(),
-                coordinate_degrees_lon_lat=self._label_lon_lat_deg,
-                google_maps_api_key=self._app_config.google_maps_api_key,
-                view_rotation_deg=self.map_view_rotation_spin.value(),
-                axis_tick_fontsize_x=float(self.axis_tick_font_x_spin.value()),
-                axis_tick_fontsize_y=float(self.axis_tick_font_y_spin.value()),
-                mercator_force_square=self.mercator_square_extent_checkbox.isChecked(),
-                mercator_span_scale_x=self.mercator_span_x_spin.value() / 100.0 * _extent_z,
-                mercator_span_scale_y=self.mercator_span_y_spin.value() / 100.0 * _extent_z,
-                span_scale_x=self.mercator_span_x_spin.value() / 100.0 * _extent_z,
-                span_scale_y=self.mercator_span_y_spin.value() / 100.0 * _extent_z,
-                basemap_offset_east_m=self.basemap_offset_e_spin.value(),
-                basemap_offset_north_m=self.basemap_offset_n_spin.value(),
-                show_isoline_map=self.show_isoline_map_checkbox.isChecked(),
-            )
-        except BasemapError as exc:
-            self._show_error(str(exc))
-            return
-        self.main_canvas = self._replace_canvas(self.main_canvas, fig, "Отдельные карты", 0)
-        self.tabs.setCurrentIndex(0)
+        if basemap_on:
+            self._run_with_busy_dialog("Загрузка подложки…", _do)
+        else:
+            _do()
 
     def on_build_overlay(self) -> None:
         if not self._ensure_data_loaded():
             return
         self._app_config = load_app_config()
 
+        if "ap" not in self.data.columns or "ac" not in self.data.columns:
+            self._show_error("Для overlay нужны оба набора данных: Ap и Ac. В текущем файле есть только один.")
+            return
         ap = self.data["ap"].to_numpy(dtype=float)
         ac = self.data["ac"].to_numpy(dtype=float)
         rn_labels = None
@@ -1533,8 +1578,9 @@ class MainWindow(QMainWindow):
         levels_step = self.levels_step_spin.value() if self.use_levels_step_checkbox.isChecked() else None
         basemap_on = self.basemap_checkbox.isChecked() and self._basemap_allowed()
         _extent_z = self.map_extent_zoom_spin.value() / 100.0
-        try:
-            fig = render_overlay_map(
+        def _do() -> None:
+            try:
+                fig = render_overlay_map(
                 triangulation=self.triangulation,
                 ap=ap,
                 ac=ac,
@@ -1582,12 +1628,19 @@ class MainWindow(QMainWindow):
                 basemap_offset_east_m=self.basemap_offset_e_spin.value(),
                 basemap_offset_north_m=self.basemap_offset_n_spin.value(),
                 show_isoline_map=self.show_isoline_map_checkbox.isChecked(),
+                basemap_show_attribution=self.basemap_attribution_checkbox.isChecked(),
             )
-        except BasemapError as exc:
-            self._show_error(str(exc))
-            return
-        self.overlay_canvas = self._replace_canvas(self.overlay_canvas, fig, "Overlay", 1)
-        self.tabs.setCurrentIndex(1)
+            except BasemapError as exc:
+                self._show_error(str(exc))
+                return
+            self.overlay_canvas = self._replace_canvas(self.overlay_canvas, fig, "Overlay", 1)
+            self.tabs.setCurrentIndex(1)
+
+        basemap_on = self.basemap_checkbox.isChecked() and self._basemap_allowed()
+        if basemap_on:
+            self._run_with_busy_dialog("Загрузка подложки…", _do)
+        else:
+            _do()
 
     def on_save_plot(self) -> None:
         canvas = self.main_canvas if self.tabs.currentIndex() == 0 else self.overlay_canvas

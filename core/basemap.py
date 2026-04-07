@@ -866,6 +866,7 @@ def add_satellite_basemap(
     basemap_offset_east_m: float = 0.0,
     basemap_offset_north_m: float = 0.0,
     preserve_axes_limits: bool = False,
+    show_attribution: bool = True,
 ) -> None:
     """Draw satellite/hybrid under data in EPSG:3857."""
     k = (basemap_source_key or "esri").strip().lower()
@@ -982,6 +983,7 @@ def add_satellite_basemap(
     ax.set_aspect("auto")
 
     headers = _tile_request_headers(basemap_source_key)
+    attribution = None if bool(show_attribution) else ""
     try:
         ctx.add_basemap(
             ax,
@@ -990,6 +992,7 @@ def add_satellite_basemap(
             zorder=zorder,
             reset_extent=True,
             headers=headers,
+            attribution=attribution,
         )
     except TypeError:
         # Older contextily: no headers/reset_extent keyword — still patch Google UA for tile fetches.
@@ -1000,9 +1003,22 @@ def add_satellite_basemap(
             ctile.USER_AGENT = headers["user-agent"]
         try:
             try:
-                ctx.add_basemap(ax, crs="EPSG:3857", source=source, zorder=zorder, reset_extent=True)
+                try:
+                    ctx.add_basemap(
+                        ax,
+                        crs="EPSG:3857",
+                        source=source,
+                        zorder=zorder,
+                        reset_extent=True,
+                        attribution=attribution,
+                    )
+                except TypeError:
+                    ctx.add_basemap(ax, crs="EPSG:3857", source=source, zorder=zorder, reset_extent=True)
             except TypeError:
-                ctx.add_basemap(ax, crs="EPSG:3857", source=source, zorder=zorder)
+                try:
+                    ctx.add_basemap(ax, crs="EPSG:3857", source=source, zorder=zorder, attribution=attribution)
+                except TypeError:
+                    ctx.add_basemap(ax, crs="EPSG:3857", source=source, zorder=zorder)
         finally:
             ctile.USER_AGENT = old_ua
     except Exception as exc:  # noqa: BLE001
