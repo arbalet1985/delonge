@@ -1257,60 +1257,23 @@ def render_overlay_map(
             )
             ap_fill_alpha = max(0.2, min(0.85, alpha * 0.8)) * map_alpha_factor
             ac_fill_alpha = max(0.2, min(0.85, (1.0 - alpha) * 0.8)) * map_alpha_factor
-            if basemap_enabled:
-                _imshow_fill(
-                    ax,
-                    xg=xg_ap,
-                    yg=yg_ap,
-                    zg=zg_ap,
-                    cmap=cmap,
-                    alpha=ap_fill_alpha,
-                    zorder=1,
-                    extras=_cf_extras,
-                    interpolation="bilinear",
-                    tfm_kw=kw,
-                )
-                _imshow_fill(
-                    ax,
-                    xg=xg_ac,
-                    yg=yg_ac,
-                    zg=zg_ac,
-                    cmap=cmap,
-                    alpha=ac_fill_alpha,
-                    zorder=1,
-                    extras=_cf_extras,
-                    interpolation="bilinear",
-                    tfm_kw=kw,
-                )
-            else:
-                cf1 = ax.contourf(
-                    xg_ap,
-                    yg_ap,
-                    zg_ap,
-                    levels=fill_levels,
-                    cmap=cmap,
-                    alpha=ap_fill_alpha,
-                    antialiased=False,
-                    linewidths=0.0,
-                    zorder=1,
-                    **_cf_extras,
-                    **kw,
-                )
-                cf2 = ax.contourf(
-                    xg_ac,
-                    yg_ac,
-                    zg_ac,
-                    levels=fill_levels,
-                    cmap=cmap,
-                    alpha=ac_fill_alpha,
-                    antialiased=False,
-                    linewidths=0.0,
-                    zorder=1,
-                    **_cf_extras,
-                    **kw,
-                )
-                _seal_filled_contours(cf1)
-                _seal_filled_contours(cf2)
+            # Always use a single raster fill for Overlay to avoid polygon seam artifacts,
+            # even without basemap.
+            with np.errstate(invalid="ignore"):
+                zg_mix = float(alpha) * zg_ap + (1.0 - float(alpha)) * zg_ac
+            mix_alpha = float(np.clip(0.8 * map_alpha_factor, 0.05, 1.0))
+            _imshow_fill(
+                ax,
+                xg=xg_ap,
+                yg=yg_ap,
+                zg=zg_mix,
+                cmap=cmap,
+                alpha=mix_alpha,
+                zorder=1,
+                extras=_cf_extras,
+                interpolation="bilinear",
+                tfm_kw=kw,
+            )
             if show_contour_lines:
                 lw_main = float(contour_line_width)
                 cs1 = ax.contour(
@@ -1338,64 +1301,24 @@ def render_overlay_map(
                     ax.clabel(cs1, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
                     ax.clabel(cs2, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
         else:
-            ap_fill_alpha = max(0.2, min(0.85, alpha * 0.8)) * map_alpha_factor
-            ac_fill_alpha = max(0.2, min(0.85, (1.0 - alpha) * 0.8)) * map_alpha_factor
-            if basemap_enabled:
-                xg_ap, yg_ap, zg_ap = _interpolate_to_grid(
-                    triangulation, ap_plot, grid_size=grid_size, smooth_sigma=0.0
-                )
-                xg_ac, yg_ac, zg_ac = _interpolate_to_grid(
-                    triangulation, ac_plot, grid_size=grid_size, smooth_sigma=0.0
-                )
-                _imshow_fill(
-                    ax,
-                    xg=xg_ap,
-                    yg=yg_ap,
-                    zg=zg_ap,
-                    cmap=cmap,
-                    alpha=ap_fill_alpha,
-                    zorder=1,
-                    extras=_cf_extras,
-                    interpolation="nearest",
-                    tfm_kw=kw,
-                )
-                _imshow_fill(
-                    ax,
-                    xg=xg_ac,
-                    yg=yg_ac,
-                    zg=zg_ac,
-                    cmap=cmap,
-                    alpha=ac_fill_alpha,
-                    zorder=1,
-                    extras=_cf_extras,
-                    interpolation="nearest",
-                    tfm_kw=kw,
-                )
-            else:
-                cf1 = ax.tricontourf(
-                    triangulation,
-                    ap_plot,
-                    levels=fill_levels,
-                    cmap=cmap,
-                    alpha=ap_fill_alpha,
-                    antialiased=False,
-                    zorder=1,
-                    **_cf_extras,
-                    **kw,
-                )
-                cf2 = ax.tricontourf(
-                    triangulation,
-                    ac_plot,
-                    levels=fill_levels,
-                    cmap=cmap,
-                    alpha=ac_fill_alpha,
-                    antialiased=False,
-                    zorder=1,
-                    **_cf_extras,
-                    **kw,
-                )
-                _seal_filled_contours(cf1)
-                _seal_filled_contours(cf2)
+            # No smoothing: still render Overlay fill as raster (nearest) to avoid seams.
+            xg_ap, yg_ap, zg_ap = _interpolate_to_grid(triangulation, ap_plot, grid_size=grid_size, smooth_sigma=0.0)
+            xg_ac, yg_ac, zg_ac = _interpolate_to_grid(triangulation, ac_plot, grid_size=grid_size, smooth_sigma=0.0)
+            with np.errstate(invalid="ignore"):
+                zg_mix = float(alpha) * zg_ap + (1.0 - float(alpha)) * zg_ac
+            mix_alpha = float(np.clip(0.8 * map_alpha_factor, 0.05, 1.0))
+            _imshow_fill(
+                ax,
+                xg=xg_ap,
+                yg=yg_ap,
+                zg=zg_mix,
+                cmap=cmap,
+                alpha=mix_alpha,
+                zorder=1,
+                extras=_cf_extras,
+                interpolation="nearest",
+                tfm_kw=kw,
+            )
             if show_contour_lines:
                 lw_main = float(contour_line_width)
                 cs1 = ax.tricontour(
