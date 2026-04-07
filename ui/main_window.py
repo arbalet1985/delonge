@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -58,6 +59,8 @@ class MainWindow(QMainWindow):
 
         self.main_canvas = FigureCanvas(Figure(figsize=(12, 5)))
         self.overlay_canvas = FigureCanvas(Figure(figsize=(6, 5.5)))
+        self._main_scroll = self._wrap_canvas_scroll(self.main_canvas)
+        self._overlay_scroll = self._wrap_canvas_scroll(self.overlay_canvas)
 
         self.column_combos: dict[str, QComboBox] = {}
         self.file_label = QLabel("Файл: не выбран")
@@ -102,6 +105,14 @@ class MainWindow(QMainWindow):
         self._load_ui_config_auto()
         self._sync_placeholder_canvas_pixel_sizes()
 
+    def _wrap_canvas_scroll(self, canvas: FigureCanvas) -> QScrollArea:
+        """Scroll wrapper for a canvas; shows scrollbars when needed."""
+        sa = QScrollArea()
+        sa.setWidgetResizable(False)
+        sa.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        sa.setWidget(canvas)
+        return sa
+
     def _canvas_size_px_for_tab(self, tab_index: int) -> tuple[int, int]:
         if tab_index == 0:
             return (int(self.dual_canvas_width_spin.value()), int(self.dual_canvas_height_spin.value()))
@@ -117,6 +128,15 @@ class MainWindow(QMainWindow):
         canvas.setFixedSize(w, h)
 
     def _sync_placeholder_canvas_pixel_sizes(self) -> None:
+        self._apply_pixel_size_to_figure_canvas(self.main_canvas, 0)
+        self._apply_pixel_size_to_figure_canvas(self.overlay_canvas, 1)
+        self.main_canvas.draw_idle()
+        self.overlay_canvas.draw_idle()
+
+    def _apply_current_canvas_pixel_sizes(self) -> None:
+        """Применить размеры канваса сразу, без пересчёта данных/триангуляции."""
+        # Размеры задаются на виджет канваса и на figure (в дюймах через DPI).
+        # Это должно работать даже до загрузки Excel и независимо от подложки.
         self._apply_pixel_size_to_figure_canvas(self.main_canvas, 0)
         self._apply_pixel_size_to_figure_canvas(self.overlay_canvas, 1)
         self.main_canvas.draw_idle()
@@ -211,14 +231,14 @@ class MainWindow(QMainWindow):
         self.mercator_span_x_spin.setValue(100)
         self.mercator_span_x_spin.setSuffix(" %")
         self.mercator_span_x_spin.setToolTip(
-            "Множитель полуразмаха по оси X (после отступа рамки), вместе с «Общий %» задаёт масштаб осей."
+            "Масштаб охвата по оси X. Больше % — шире кадр по X; меньше % — крупнее детали по X."
         )
         self.mercator_span_y_spin = QSpinBox()
         self.mercator_span_y_spin.setRange(25, 400)
         self.mercator_span_y_spin.setValue(100)
         self.mercator_span_y_spin.setSuffix(" %")
         self.mercator_span_y_spin.setToolTip(
-            "Множитель полуразмаха по оси Y; при разных X/Y можно поджать или вытянуть кадр по вертикали."
+            "Масштаб охвата по оси Y. Больше % — шире кадр по Y; меньше % — крупнее детали по Y."
         )
 
         self.basemap_offset_e_spin = QDoubleSpinBox()
@@ -635,8 +655,8 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         self.tabs = QTabWidget()
-        self.tabs.addTab(self.main_canvas, "Отдельные карты")
-        self.tabs.addTab(self.overlay_canvas, "Overlay")
+        self.tabs.addTab(self._main_scroll, "Отдельные карты")
+        self.tabs.addTab(self._overlay_scroll, "Overlay")
         layout.addWidget(self.tabs, 1)
         return panel
 
@@ -684,10 +704,81 @@ class MainWindow(QMainWindow):
         n = max(2, int(n))
         self.custom_gradient_colors = []
         self._gradient_user_edited = set()
+        self.custom_gradient_colors = self._default_gradient_colors(n)
+
+    @staticmethod
+    def _default_gradient_colors(n: int) -> list[str]:
+        n = max(2, int(n))
+        out: list[str] = []
         for i in range(n):
             t = i / max(n - 1, 1)
             v = int(round(255 * (1.0 - t)))
-            self.custom_gradient_colors.append(f"#{v:02x}{v:02x}{v:02x}")
+            out.append(f"#{v:02x}{v:02x}{v:02x}")
+        return out
+
+    @staticmethod
+    def _hex_norm(s: str) -> str:
+        s = (s or "").strip().lower()
+        return s if s.startswith("#") else f"#{s}"
+
+    @staticmethod
+    def _text_color_for_bg(hex_color: str) -> str:
+        """Чёрный/белый текст по яркости фона."""
+        c = QColor(hex_color)
+        if not c.isValid():
+            return "#111"
+        # Perceived luminance
+        lum = 0.2126 * c.redF() + 0.7152 * c.greenF() + 0.0722 * c.blueF()
+        return "#111" if lum > 0.62 else "#fff"
+
+    def _reset_gradient_tile_to_default(self, idx: int) -> None:
+        n = self.gradient_steps_spin.value()
+        if not (0 <= idx < n):
+            return
+        defaults = self._default_gradient_colors(n)
+        while len(self.custom_gradient_colors) < n:
+            self.custom_gradient_colors.append("#808080")
+        self.custom_gradient_colors = self.custom_gradient_colors[:n]
+        self.custom_gradient_colors[idx] = defaults[idx]
+        self._gradient_user_edited.discard(idx)
+        self._rebuild_gradient_color_buttons()
+        self._schedule_debounced_redraw()
+
+    def _reset_gradient_all_to_default(self) -> None:
+        n = self.gradient_steps_spin.value()
+        self.custom_gradient_colors = self._default_gradient_colors(n)
+        self._gradient_user_edited = set()
+        self._rebuild_gradient_color_buttons()
+        self._schedule_debounced_redraw()
+
+    def _reset_gradient_modified_to_default(self) -> None:
+        """Сбросить только плитки, изменённые вручную."""
+        n = self.gradient_steps_spin.value()
+        defaults = self._default_gradient_colors(n)
+        while len(self.custom_gradient_colors) < n:
+            self.custom_gradient_colors.append("#808080")
+        self.custom_gradient_colors = self.custom_gradient_colors[:n]
+        changed_any = False
+        for i in sorted({i for i in self._gradient_user_edited if 0 <= i < n}):
+            self.custom_gradient_colors[i] = defaults[i]
+            self._gradient_user_edited.discard(i)
+            changed_any = True
+        if changed_any:
+            self._rebuild_gradient_color_buttons()
+            self._schedule_debounced_redraw()
+
+    def _show_gradient_tile_menu(self, btn: QPushButton, idx: int, pos) -> None:
+        menu = QMenu(btn)
+        act_reset_one = menu.addAction("Сбросить эту плитку")
+        act_reset_modified = menu.addAction("Сбросить изменённые")
+        act_reset_all = menu.addAction("Сбросить все плитки")
+        chosen = menu.exec(btn.mapToGlobal(pos))
+        if chosen == act_reset_one:
+            self._reset_gradient_tile_to_default(idx)
+        elif chosen == act_reset_modified:
+            self._reset_gradient_modified_to_default()
+        elif chosen == act_reset_all:
+            self._reset_gradient_all_to_default()
 
     def _rebuild_gradient_color_buttons(self) -> None:
         layout = self.gradient_colors_layout
@@ -705,10 +796,21 @@ class MainWindow(QMainWindow):
             btn = QPushButton(str(i + 1))
             btn.setFixedWidth(34)
             c = self.custom_gradient_colors[i]
+            dirty = i in self._gradient_user_edited
+            txt = self._text_color_for_bg(c)
+            border = "2px solid #ff9800" if dirty else "1px solid #c9c9c9"
+            # Small corner marker when modified
+            marker = "inset 0 0 0 999px rgba(255,152,0,0.12);" if dirty else ""
             btn.setStyleSheet(
-                f"background: {c}; color: #111; border-radius: 4px; padding: 3px; font-size: 11px;"
+                "QPushButton {"
+                f"background: {c}; color: {txt}; border-radius: 4px; padding: 3px; font-size: 11px; border: {border};"
+                f"{marker}"
+                "}"
+                "QPushButton:hover { border: 2px solid #1f5ed6; }"
             )
             btn.clicked.connect(lambda checked=False, idx=i: self._pick_gradient_color(idx))
+            btn.setContextMenuPolicy(Qt.CustomContextMenu)
+            btn.customContextMenuRequested.connect(lambda p, b=btn, idx=i: self._show_gradient_tile_menu(b, idx, p))
             row, col = i // cols, i % cols
             layout.addWidget(btn, row, col)
 
@@ -1160,6 +1262,11 @@ class MainWindow(QMainWindow):
         self.mercator_span_x_spin.valueChanged.connect(self._schedule_debounced_redraw)
         self.mercator_span_y_spin.valueChanged.connect(self._schedule_debounced_redraw)
         self.map_extent_zoom_spin.valueChanged.connect(self._schedule_debounced_redraw)
+        # Размер канваса применяем сразу (без пересчёта данных), а затем планируем обычную перерисовку.
+        self.dual_canvas_width_spin.valueChanged.connect(self._apply_current_canvas_pixel_sizes)
+        self.dual_canvas_height_spin.valueChanged.connect(self._apply_current_canvas_pixel_sizes)
+        self.overlay_canvas_width_spin.valueChanged.connect(self._apply_current_canvas_pixel_sizes)
+        self.overlay_canvas_height_spin.valueChanged.connect(self._apply_current_canvas_pixel_sizes)
         self.dual_canvas_width_spin.valueChanged.connect(self._schedule_debounced_redraw)
         self.dual_canvas_height_spin.valueChanged.connect(self._schedule_debounced_redraw)
         self.overlay_canvas_width_spin.valueChanged.connect(self._schedule_debounced_redraw)
@@ -1388,6 +1495,8 @@ class MainWindow(QMainWindow):
                 mercator_force_square=self.mercator_square_extent_checkbox.isChecked(),
                 mercator_span_scale_x=self.mercator_span_x_spin.value() / 100.0 * _extent_z,
                 mercator_span_scale_y=self.mercator_span_y_spin.value() / 100.0 * _extent_z,
+                span_scale_x=self.mercator_span_x_spin.value() / 100.0 * _extent_z,
+                span_scale_y=self.mercator_span_y_spin.value() / 100.0 * _extent_z,
                 basemap_offset_east_m=self.basemap_offset_e_spin.value(),
                 basemap_offset_north_m=self.basemap_offset_n_spin.value(),
                 show_isoline_map=self.show_isoline_map_checkbox.isChecked(),
@@ -1460,6 +1569,8 @@ class MainWindow(QMainWindow):
                 mercator_force_square=self.mercator_square_extent_checkbox.isChecked(),
                 mercator_span_scale_x=self.mercator_span_x_spin.value() / 100.0 * _extent_z,
                 mercator_span_scale_y=self.mercator_span_y_spin.value() / 100.0 * _extent_z,
+                span_scale_x=self.mercator_span_x_spin.value() / 100.0 * _extent_z,
+                span_scale_y=self.mercator_span_y_spin.value() / 100.0 * _extent_z,
                 basemap_offset_east_m=self.basemap_offset_e_spin.value(),
                 basemap_offset_north_m=self.basemap_offset_n_spin.value(),
                 show_isoline_map=self.show_isoline_map_checkbox.isChecked(),
@@ -1536,8 +1647,9 @@ class MainWindow(QMainWindow):
     def _replace_canvas(self, old_canvas: FigureCanvas, figure: Figure, tab_title: str, tab_index: int) -> FigureCanvas:
         new_canvas = FigureCanvas(figure)
         self._apply_pixel_size_to_figure_canvas(new_canvas, tab_index)
-        self.tabs.removeTab(tab_index)
-        self.tabs.insertTab(tab_index, new_canvas, tab_title)
+        scroll = self._main_scroll if tab_index == 0 else self._overlay_scroll
+        scroll.takeWidget()
+        scroll.setWidget(new_canvas)
         old_canvas.deleteLater()
         new_canvas.draw()
         return new_canvas

@@ -20,6 +20,79 @@ from core.basemap import (
 from core.interpolation import build_levels, mirror_fields
 
 
+def _seal_filled_contours(cs) -> None:
+    """Убрать видимые «швы» между полигонами contourf/tricontourf.
+
+    На спутниковой подложке при ``alpha < 1`` Matplotlib иногда показывает тонкие светлые линии
+    на стыках полигонов (особенно в Web Mercator). Это лечится отключением обводок/AA и
+    принудительным rasterization для коллекций.
+    """
+    try:
+        collections = list(getattr(cs, "collections", []))
+    except Exception:  # noqa: BLE001
+        collections = []
+    for col in collections:
+        try:
+            col.set_edgecolor("face")
+            col.set_linewidth(0.0)
+            col.set_antialiased(False)
+            col.set_rasterized(True)
+        except Exception:  # noqa: BLE001
+            continue
+
+
+def _imshow_fill(
+    ax,
+    *,
+    xg: np.ndarray,
+    yg: np.ndarray,
+    zg: np.ndarray,
+    cmap: LinearSegmentedColormap,
+    alpha: float,
+    zorder: float,
+    extras: dict,
+    interpolation: str,
+    tfm_kw: dict,
+):
+    """Raster fill to avoid polygon seam artifacts.
+
+    Used primarily when basemap is enabled and alpha < 1, where contourf seams become visible.
+    Returns the image (mappable) for colorbar.
+    """
+    xmin = float(np.nanmin(xg))
+    xmax = float(np.nanmax(xg))
+    ymin = float(np.nanmin(yg))
+    ymax = float(np.nanmax(yg))
+    # Ensure NaNs are transparent.
+    cmap2 = cmap.copy()
+    cmap2.set_bad((0.0, 0.0, 0.0, 0.0))
+    zmask = np.ma.masked_invalid(zg)
+    # "interpolation" controls smoothness without introducing polygon seams.
+    # ``contourf`` accepts ``extend=``, but ``imshow``/AxesImage doesn't.
+    # Keep only parameters applicable to images: norm/vmin/vmax.
+    img_extras: dict = {}
+    if isinstance(extras, dict):
+        if "norm" in extras and extras["norm"] is not None:
+            img_extras["norm"] = extras["norm"]
+        else:
+            if "vmin" in extras:
+                img_extras["vmin"] = extras["vmin"]
+            if "vmax" in extras:
+                img_extras["vmax"] = extras["vmax"]
+
+    return ax.imshow(
+        zmask,
+        extent=(xmin, xmax, ymin, ymax),
+        origin="lower",
+        cmap=cmap2,
+        alpha=float(alpha),
+        zorder=float(zorder),
+        interpolation=str(interpolation),
+        **img_extras,
+        **tfm_kw,
+    )
+
+
 def _tfm_kw(tfm: mtransforms.Transform | None) -> dict:
     return {"transform": tfm} if tfm is not None else {}
 
@@ -92,6 +165,38 @@ def _set_mercator_view_axis_limits(
     )
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
+
+
+def _set_cartesian_axis_limits(
+    ax,
+    triangulation: Triangulation,
+    axis_margin: float,
+    *,
+    span_scale_x: float = 1.0,
+    span_scale_y: float = 1.0,
+) -> None:
+    """Явные пределы осей в исходных координатах.
+
+    Нужны для управления «охватом» по X/Y (аналог mercator_span_*), чтобы можно было
+    увеличивать/уменьшать кадр по каждой оси независимо от подложки/проекции.
+    """
+    x = triangulation.x
+    y = triangulation.y
+    x0 = float(np.min(x))
+    x1 = float(np.max(x))
+    y0 = float(np.min(y))
+    y1 = float(np.max(y))
+    cx = 0.5 * (x0 + x1)
+    cy = 0.5 * (y0 + y1)
+
+    margin = float(np.clip(axis_margin, 0.0, 0.3))
+    dx = max(1e-12, (x1 - x0))
+    dy = max(1e-12, (y1 - y0))
+    half_x = 0.5 * dx * (1.0 + 2.0 * margin) * float(span_scale_x)
+    half_y = 0.5 * dy * (1.0 + 2.0 * margin) * float(span_scale_y)
+
+    ax.set_xlim((cx - half_x, cx + half_x))
+    ax.set_ylim((cy - half_y, cy + half_y))
 
 
 def _finalize_web_mercator_aspect_after_layout(
@@ -590,6 +695,8 @@ def render_dual_maps(
     basemap_offset_east_m: float = 0.0,
     basemap_offset_north_m: float = 0.0,
     show_isoline_map: bool = True,
+    span_scale_x: float = 1.0,
+    span_scale_y: float = 1.0,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
     fill_levels, contour_levels, vmin, vmax, cmap, bnorm = _build_fill_cmap_and_norm(
@@ -663,17 +770,34 @@ def render_dual_maps(
             xg_ap, yg_ap, zg_ap = _interpolate_to_grid(
                 triangulation, ap_plot, grid_size=grid_size, smooth_sigma=smooth_sigma
             )
-            cf_ap = axes[0].contourf(
-                xg_ap,
-                yg_ap,
-                zg_ap,
-                levels=fill_levels,
-                cmap=cmap,
-                alpha=fill_alpha,
-                zorder=1,
-                **_cf_extras,
-                **kw0,
-            )
+            if basemap_enabled:
+                cf_ap = _imshow_fill(
+                    axes[0],
+                    xg=xg_ap,
+                    yg=yg_ap,
+                    zg=zg_ap,
+                    cmap=cmap,
+                    alpha=fill_alpha,
+                    zorder=1,
+                    extras=_cf_extras,
+                    interpolation="bilinear",
+                    tfm_kw=kw0,
+                )
+            else:
+                cf_ap = axes[0].contourf(
+                    xg_ap,
+                    yg_ap,
+                    zg_ap,
+                    levels=fill_levels,
+                    cmap=cmap,
+                    alpha=fill_alpha,
+                    antialiased=False,
+                    linewidths=0.0,
+                    zorder=1,
+                    **_cf_extras,
+                    **kw0,
+                )
+                _seal_filled_contours(cf_ap)
             if show_contour_lines:
                 cs = axes[0].contour(
                     xg_ap,
@@ -688,16 +812,35 @@ def render_dual_maps(
                 if show_contour_labels:
                     axes[0].clabel(cs, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
         else:
-            cf_ap = axes[0].tricontourf(
-                triangulation,
-                ap_plot,
-                levels=fill_levels,
-                cmap=cmap,
-                alpha=fill_alpha,
-                zorder=1,
-                **_cf_extras,
-                **kw0,
-            )
+            if basemap_enabled:
+                xg_ap, yg_ap, zg_ap = _interpolate_to_grid(
+                    triangulation, ap_plot, grid_size=grid_size, smooth_sigma=0.0
+                )
+                cf_ap = _imshow_fill(
+                    axes[0],
+                    xg=xg_ap,
+                    yg=yg_ap,
+                    zg=zg_ap,
+                    cmap=cmap,
+                    alpha=fill_alpha,
+                    zorder=1,
+                    extras=_cf_extras,
+                    interpolation="nearest",
+                    tfm_kw=kw0,
+                )
+            else:
+                cf_ap = axes[0].tricontourf(
+                    triangulation,
+                    ap_plot,
+                    levels=fill_levels,
+                    cmap=cmap,
+                    alpha=fill_alpha,
+                    antialiased=False,
+                    zorder=1,
+                    **_cf_extras,
+                    **kw0,
+                )
+                _seal_filled_contours(cf_ap)
             if show_contour_lines:
                 cs = axes[0].tricontour(
                     triangulation,
@@ -749,10 +892,17 @@ def render_dual_maps(
             x_label=x_label,
             y_label=y_label,
             axis_margin=axis_margin,
-            skip_margins=basemap_enabled,
+            skip_margins=True,
             axis_tick_fontsize_x=axis_tick_fontsize_x,
             axis_tick_fontsize_y=axis_tick_fontsize_y,
             show_coordinate_grid=show_coordinate_grid,
+        )
+        _set_cartesian_axis_limits(
+            axes[0],
+            triangulation,
+            axis_margin,
+            span_scale_x=span_scale_x,
+            span_scale_y=span_scale_y,
         )
     if not web_mercator:
         _apply_axis_inversion(axes[0], invert_x=invert_x, invert_y=invert_y)
@@ -764,17 +914,34 @@ def render_dual_maps(
             xg_ac, yg_ac, zg_ac = _interpolate_to_grid(
                 triangulation, ac_plot, grid_size=grid_size, smooth_sigma=smooth_sigma
             )
-            cf_ac = axes[1].contourf(
-                xg_ac,
-                yg_ac,
-                zg_ac,
-                levels=fill_levels,
-                cmap=cmap,
-                alpha=fill_alpha,
-                zorder=1,
-                **_cf_extras,
-                **kw1,
-            )
+            if basemap_enabled:
+                cf_ac = _imshow_fill(
+                    axes[1],
+                    xg=xg_ac,
+                    yg=yg_ac,
+                    zg=zg_ac,
+                    cmap=cmap,
+                    alpha=fill_alpha,
+                    zorder=1,
+                    extras=_cf_extras,
+                    interpolation="bilinear",
+                    tfm_kw=kw1,
+                )
+            else:
+                cf_ac = axes[1].contourf(
+                    xg_ac,
+                    yg_ac,
+                    zg_ac,
+                    levels=fill_levels,
+                    cmap=cmap,
+                    alpha=fill_alpha,
+                    antialiased=False,
+                    linewidths=0.0,
+                    zorder=1,
+                    **_cf_extras,
+                    **kw1,
+                )
+                _seal_filled_contours(cf_ac)
             if show_contour_lines:
                 cs = axes[1].contour(
                     xg_ac,
@@ -789,16 +956,35 @@ def render_dual_maps(
                 if show_contour_labels:
                     axes[1].clabel(cs, inline=True, fontsize=contour_label_font_size, fmt="%.2f")
         else:
-            cf_ac = axes[1].tricontourf(
-                triangulation,
-                ac_plot,
-                levels=fill_levels,
-                cmap=cmap,
-                alpha=fill_alpha,
-                zorder=1,
-                **_cf_extras,
-                **kw1,
-            )
+            if basemap_enabled:
+                xg_ac, yg_ac, zg_ac = _interpolate_to_grid(
+                    triangulation, ac_plot, grid_size=grid_size, smooth_sigma=0.0
+                )
+                cf_ac = _imshow_fill(
+                    axes[1],
+                    xg=xg_ac,
+                    yg=yg_ac,
+                    zg=zg_ac,
+                    cmap=cmap,
+                    alpha=fill_alpha,
+                    zorder=1,
+                    extras=_cf_extras,
+                    interpolation="nearest",
+                    tfm_kw=kw1,
+                )
+            else:
+                cf_ac = axes[1].tricontourf(
+                    triangulation,
+                    ac_plot,
+                    levels=fill_levels,
+                    cmap=cmap,
+                    alpha=fill_alpha,
+                    antialiased=False,
+                    zorder=1,
+                    **_cf_extras,
+                    **kw1,
+                )
+                _seal_filled_contours(cf_ac)
             if show_contour_lines:
                 cs = axes[1].tricontour(
                     triangulation,
@@ -850,10 +1036,17 @@ def render_dual_maps(
             x_label=x_label,
             y_label=y_label,
             axis_margin=axis_margin,
-            skip_margins=basemap_enabled,
+            skip_margins=True,
             axis_tick_fontsize_x=axis_tick_fontsize_x,
             axis_tick_fontsize_y=axis_tick_fontsize_y,
             show_coordinate_grid=show_coordinate_grid,
+        )
+        _set_cartesian_axis_limits(
+            axes[1],
+            triangulation,
+            axis_margin,
+            span_scale_x=span_scale_x,
+            span_scale_y=span_scale_y,
         )
     if not web_mercator:
         _apply_axis_inversion(axes[1], invert_x=invert_x, invert_y=invert_y)
@@ -958,6 +1151,8 @@ def render_overlay_map(
     basemap_offset_east_m: float = 0.0,
     basemap_offset_north_m: float = 0.0,
     show_isoline_map: bool = True,
+    span_scale_x: float = 1.0,
+    span_scale_y: float = 1.0,
 ) -> Figure:
     ap_plot, ac_plot = mirror_fields(ap, ac, enforce_mirror=enforce_mirror)
     fill_levels, contour_levels, vmin, vmax, cmap, bnorm = _build_fill_cmap_and_norm(
@@ -1013,30 +1208,60 @@ def render_overlay_map(
             )
             ap_fill_alpha = max(0.2, min(0.85, alpha * 0.8)) * map_alpha_factor
             ac_fill_alpha = max(0.2, min(0.85, (1.0 - alpha) * 0.8)) * map_alpha_factor
-            ax.contourf(
-                xg_ap,
-                yg_ap,
-                zg_ap,
-                levels=fill_levels,
-                cmap=cmap,
-                alpha=ap_fill_alpha,
-                antialiased=False,
-                zorder=1,
-                **_cf_extras,
-                **kw,
-            )
-            ax.contourf(
-                xg_ac,
-                yg_ac,
-                zg_ac,
-                levels=fill_levels,
-                cmap=cmap,
-                alpha=ac_fill_alpha,
-                antialiased=False,
-                zorder=1,
-                **_cf_extras,
-                **kw,
-            )
+            if basemap_enabled:
+                _imshow_fill(
+                    ax,
+                    xg=xg_ap,
+                    yg=yg_ap,
+                    zg=zg_ap,
+                    cmap=cmap,
+                    alpha=ap_fill_alpha,
+                    zorder=1,
+                    extras=_cf_extras,
+                    interpolation="bilinear",
+                    tfm_kw=kw,
+                )
+                _imshow_fill(
+                    ax,
+                    xg=xg_ac,
+                    yg=yg_ac,
+                    zg=zg_ac,
+                    cmap=cmap,
+                    alpha=ac_fill_alpha,
+                    zorder=1,
+                    extras=_cf_extras,
+                    interpolation="bilinear",
+                    tfm_kw=kw,
+                )
+            else:
+                cf1 = ax.contourf(
+                    xg_ap,
+                    yg_ap,
+                    zg_ap,
+                    levels=fill_levels,
+                    cmap=cmap,
+                    alpha=ap_fill_alpha,
+                    antialiased=False,
+                    linewidths=0.0,
+                    zorder=1,
+                    **_cf_extras,
+                    **kw,
+                )
+                cf2 = ax.contourf(
+                    xg_ac,
+                    yg_ac,
+                    zg_ac,
+                    levels=fill_levels,
+                    cmap=cmap,
+                    alpha=ac_fill_alpha,
+                    antialiased=False,
+                    linewidths=0.0,
+                    zorder=1,
+                    **_cf_extras,
+                    **kw,
+                )
+                _seal_filled_contours(cf1)
+                _seal_filled_contours(cf2)
             if show_contour_lines:
                 lw_main = float(contour_line_width)
                 cs1 = ax.contour(
@@ -1066,28 +1291,62 @@ def render_overlay_map(
         else:
             ap_fill_alpha = max(0.2, min(0.85, alpha * 0.8)) * map_alpha_factor
             ac_fill_alpha = max(0.2, min(0.85, (1.0 - alpha) * 0.8)) * map_alpha_factor
-            ax.tricontourf(
-                triangulation,
-                ap_plot,
-                levels=fill_levels,
-                cmap=cmap,
-                alpha=ap_fill_alpha,
-                antialiased=False,
-                zorder=1,
-                **_cf_extras,
-                **kw,
-            )
-            ax.tricontourf(
-                triangulation,
-                ac_plot,
-                levels=fill_levels,
-                cmap=cmap,
-                alpha=ac_fill_alpha,
-                antialiased=False,
-                zorder=1,
-                **_cf_extras,
-                **kw,
-            )
+            if basemap_enabled:
+                xg_ap, yg_ap, zg_ap = _interpolate_to_grid(
+                    triangulation, ap_plot, grid_size=grid_size, smooth_sigma=0.0
+                )
+                xg_ac, yg_ac, zg_ac = _interpolate_to_grid(
+                    triangulation, ac_plot, grid_size=grid_size, smooth_sigma=0.0
+                )
+                _imshow_fill(
+                    ax,
+                    xg=xg_ap,
+                    yg=yg_ap,
+                    zg=zg_ap,
+                    cmap=cmap,
+                    alpha=ap_fill_alpha,
+                    zorder=1,
+                    extras=_cf_extras,
+                    interpolation="nearest",
+                    tfm_kw=kw,
+                )
+                _imshow_fill(
+                    ax,
+                    xg=xg_ac,
+                    yg=yg_ac,
+                    zg=zg_ac,
+                    cmap=cmap,
+                    alpha=ac_fill_alpha,
+                    zorder=1,
+                    extras=_cf_extras,
+                    interpolation="nearest",
+                    tfm_kw=kw,
+                )
+            else:
+                cf1 = ax.tricontourf(
+                    triangulation,
+                    ap_plot,
+                    levels=fill_levels,
+                    cmap=cmap,
+                    alpha=ap_fill_alpha,
+                    antialiased=False,
+                    zorder=1,
+                    **_cf_extras,
+                    **kw,
+                )
+                cf2 = ax.tricontourf(
+                    triangulation,
+                    ac_plot,
+                    levels=fill_levels,
+                    cmap=cmap,
+                    alpha=ac_fill_alpha,
+                    antialiased=False,
+                    zorder=1,
+                    **_cf_extras,
+                    **kw,
+                )
+                _seal_filled_contours(cf1)
+                _seal_filled_contours(cf2)
             if show_contour_lines:
                 lw_main = float(contour_line_width)
                 cs1 = ax.tricontour(
@@ -1151,10 +1410,17 @@ def render_overlay_map(
             x_label=x_label,
             y_label=y_label,
             axis_margin=axis_margin,
-            skip_margins=basemap_enabled,
+            skip_margins=True,
             axis_tick_fontsize_x=axis_tick_fontsize_x,
             axis_tick_fontsize_y=axis_tick_fontsize_y,
             show_coordinate_grid=show_coordinate_grid,
+        )
+        _set_cartesian_axis_limits(
+            ax,
+            triangulation,
+            axis_margin,
+            span_scale_x=span_scale_x,
+            span_scale_y=span_scale_y,
         )
     if not web_mercator:
         _apply_axis_inversion(ax, invert_x=invert_x, invert_y=invert_y)
